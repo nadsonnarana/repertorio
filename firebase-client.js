@@ -22,8 +22,6 @@ import {
   where,
   orderBy,
   serverTimestamp,
-  arrayUnion,
-  arrayRemove,
   deleteField,
   writeBatch
 } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
@@ -128,7 +126,7 @@ export async function listRepertoires() {
 export async function createRepertoire(name) {
   const user = requireSignedIn();
   const ref = await addDoc(collection(db, "repertoires"), {
-    name: String(name).trim(), ownerUid: user.uid, editorUids: [], publicRead: true,
+    name: String(name).trim(), ownerUid: user.uid, publicRead: true,
     createdAt: serverTimestamp()
   });
   return ref.id;
@@ -138,8 +136,7 @@ export async function secureLegacyRepertoire(repertoireId, previousData) {
   if (previousData.ownerUid !== user.uid) throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
   return updateDoc(doc(db, "repertoires", repertoireId), {
     publicRead: true,
-    editorUids: Array.isArray(previousData.editorUids) ? previousData.editorUids : [],
-    ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField()
+    ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
   });
 }
 export async function setRepertoireName(repertoireId, name) {
@@ -156,20 +153,31 @@ export async function deleteRepertoire(repertoireId) {
   }
   return deleteDoc(doc(db, "repertoires", repertoireId));
 }
-export async function grantEditorAccess(repertoireId, uid) {
+export async function grantEditorAccess(repertoireId, email) {
   requireSignedIn();
-  return updateDoc(doc(db, "repertoires", repertoireId), {
-    editorUids: arrayUnion(String(uid || "").trim())
+  const normalized = normalizeEmail(email);
+  assertAllowedEmail(normalized);
+  return setDoc(doc(db, "repertoires", repertoireId, "editorAccess", normalized), {
+    grantedAt: serverTimestamp()
   });
 }
-export async function revokeEditorAccess(repertoireId, uid) {
+export async function revokeEditorAccess(repertoireId, email) {
   requireSignedIn();
-  const normalized = String(uid || "").trim();
+  const normalized = normalizeEmail(email);
   const user = requireSignedIn();
-  if (normalized === user.uid) throw new Error("O dono não pode remover a própria conta.");
-  return updateDoc(doc(db, "repertoires", repertoireId), {
-    editorUids: arrayRemove(normalized)
-  });
+  if (normalized === normalizeEmail(user.email)) throw new Error("O dono não pode remover o próprio acesso.");
+  return deleteDoc(doc(db, "repertoires", repertoireId, "editorAccess", normalized));
+}
+export async function listEditorAccess(repertoireId) {
+  requireSignedIn();
+  const snap = await getDocs(collection(db, "repertoires", repertoireId, "editorAccess"));
+  return snap.docs.map(item => item.id);
+}
+export async function hasEditorAccess(repertoireId) {
+  const user = requireSignedIn();
+  if (!user.email) return false;
+  const snap = await getDoc(doc(db, "repertoires", repertoireId, "editorAccess", normalizeEmail(user.email)));
+  return snap.exists();
 }
 export async function listSongs(repertoireId) {
   requireSignedIn();
