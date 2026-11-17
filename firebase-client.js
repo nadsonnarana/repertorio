@@ -36,6 +36,7 @@ const requireSignedIn = () => {
   return auth.currentUser;
 };
 const normalizeEmail = email => String(email || "").trim().toLowerCase();
+const siteOwnerEmail = "nadsonp850@gmail.com";
 const allowedEmailDomains = new Set(["gmail.com", "hotmail.com", "icloud.com"]);
 function assertAllowedEmail(email) {
   const domain = normalizeEmail(email).split("@").pop();
@@ -61,6 +62,7 @@ export function sanitizeSongHtml(value) {
   template.innerHTML = safe;
   template.content.querySelectorAll("*").forEach(element => {
     const isMarker = element.classList.contains("marker");
+    const textColorClass = [...element.classList].find(name => /^lyric-color-(red|blue|green|purple|orange|black)$/.test(name));
     const background = element.style.backgroundColor;
     const safeColor = /^(#[\da-f]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\))$/i.test(background);
     element.removeAttribute("class");
@@ -69,6 +71,7 @@ export function sanitizeSongHtml(value) {
       element.classList.add("marker");
       if (safeColor) element.style.backgroundColor = background;
     }
+    if (textColorClass) element.classList.add(textColorClass);
   });
   return template.innerHTML;
 }
@@ -133,7 +136,9 @@ export async function createRepertoire(name) {
 }
 export async function secureLegacyRepertoire(repertoireId, previousData) {
   const user = requireSignedIn();
-  if (previousData.ownerUid !== user.uid) throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
+  if (previousData.ownerUid !== user.uid && normalizeEmail(user.email) !== siteOwnerEmail) {
+    throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
+  }
   return updateDoc(doc(db, "repertoires", repertoireId), {
     publicRead: true,
     ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
@@ -178,6 +183,18 @@ export async function hasEditorAccess(repertoireId) {
   if (!user.email) return false;
   const snap = await getDoc(doc(db, "repertoires", repertoireId, "editorAccess", normalizeEmail(user.email)));
   return snap.exists();
+}
+export async function getRepertoireNotes(repertoireId) {
+  requireSignedIn();
+  const snap = await getDoc(doc(db, "repertoires", repertoireId, "settings", "notes"));
+  return snap.exists() ? String(snap.data().text || "") : "";
+}
+export async function saveRepertoireNotes(repertoireId, text) {
+  const user = requireSignedIn();
+  const value = String(text || "").slice(0, 5000);
+  return setDoc(doc(db, "repertoires", repertoireId, "settings", "notes"), {
+    text: value, updatedAt: serverTimestamp(), updatedByUid: user.uid
+  });
 }
 export async function listSongs(repertoireId) {
   requireSignedIn();

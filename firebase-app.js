@@ -134,6 +134,7 @@ async function reloadData() {
     const canEdit = isOwner || await FB.hasEditorAccess(item.id);
     const songs = await FB.listSongs(item.id);
     const comments = isOwner ? await FB.listComments(item.id) : [];
+    const observations = await FB.getRepertoireNotes(item.id);
     return {
       id: item.id,
       name: item.name || "Repertório sem nome",
@@ -142,6 +143,7 @@ async function reloadData() {
       canEdit,
       editorEmails,
       members: membersFor({ ...item, isOwner, editorEmails }),
+      observations,
       songs: songs.map(song => ({ id: song.id, name: song.title, key: song.key || "—", body: song.body || "", bodyHtml: song.bodyHtml || "", order: song.order || 0 })),
       comments
     };
@@ -217,7 +219,7 @@ function renderDetail() {
   const detailActions = (owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button><button class="btn" onclick="shareRep()">✎ Designar editores</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>')
     + (record.canEdit ? '<button class="btn primary" onclick="addSong()">＋ Adicionar música</button>' : '')
     + (owner ? '<button class="btn danger" onclick="confirmDeleteRep(\'' + record.id + '\')">Apagar</button>' : '');
-  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section><section class="panel"><h2>Ideias de acordes de ligação</h2><div class="muted">Escolha os tons de saída e chegada para gerar caminhos harmônicos.</div><div class="toolrow"><label class="field">Tom que termina<select id="from"></select></label><span style="padding-bottom:8px;color:#9aa49c">→</span><label class="field">Tom que começa<select id="to"></select></label><button class="btn primary" onclick="generate()">Gerar ideias</button></div><div class="result" id="result"></div></section><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section>';
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn" onclick="openObservations()">▤ Observações</button><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section><section class="panel"><h2>Ideias de acordes de ligação</h2><div class="muted">Escolha os tons de saída e chegada para gerar caminhos harmônicos.</div><div class="toolrow"><label class="field">Tom que termina<select id="from"></select></label><span style="padding-bottom:8px;color:#9aa49c">→</span><label class="field">Tom que começa<select id="to"></select></label><button class="btn primary" onclick="generate()">Gerar ideias</button></div><div class="result" id="result"></div></section><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section>';
   const list = byId("songlist");
   if (!record.songs.length) list.innerHTML = '<div class="empty">Este repertório ainda não tem músicas.</div>';
   record.songs.forEach((song, index) => {
@@ -340,7 +342,38 @@ async function deleteComment(index) {
 }
 function openModal(html) { byId("modal").removeAttribute("role"); byId("modal").removeAttribute("aria-modal"); byId("modal").innerHTML = html; byId("modalback").classList.add("open"); }
 function closeModal() { if (window.siteConfirmPending?.()) { window.resolveSiteConfirm(false); return; } byId("modalback").classList.remove("open"); }
-function openReader() {
+function openObservations() {
+  const record = currentRep(); if (!record) return;
+  const note = String(record.observations || "");
+  const display = note.trim()
+    ? '<div class="observations-text">' + escapeHtml(note) + '</div>'
+    : '<div class="empty observations-empty">Nenhuma observação foi adicionada ainda.</div>';
+  const editor = record.isOwner
+    ? '<label class="field observations-field">Observações para os músicos<textarea id="observationsText" maxlength="5000" placeholder="Ex.: começar em volume baixo; atenção à mudança de tom depois da segunda música.">' + escapeHtml(note) + '</textarea><span class="muted">Até 5.000 caracteres. Os músicos verão este texto antes da rolagem.</span></label>'
+    : '';
+  openModal('<h2>Observações · ' + escapeHtml(record.name) + '</h2><p>Leia os avisos da banda antes de abrir a rolagem do repertório.</p>' + (record.isOwner ? editor : display) + '<div class="modalfoot observations-actions"><button class="btn" onclick="closeModal()">Fechar</button>' + (record.isOwner ? '<button class="btn" onclick="saveObservations()">Salvar observações</button>' : '') + '<button class="btn primary" onclick="startReader()">Abrir rolagem</button></div>');
+}
+async function saveObservations() {
+  const record = currentRep(), field = byId("observationsText"); if (!record?.isOwner || !field) return;
+  const text = field.value.slice(0, 5000);
+  try {
+    await FB.saveRepertoireNotes(record.id, text); record.observations = text;
+    openObservations(); notice("Observações salvas para os músicos.");
+  } catch (error) { notice(friendlyError(error), true); }
+}
+async function startReader() {
+  const record = currentRep(); if (!record) return;
+  const field = byId("observationsText");
+  if (record.isOwner && field && field.value !== String(record.observations || "")) {
+    try {
+      record.observations = field.value.slice(0, 5000);
+      await FB.saveRepertoireNotes(record.id, record.observations);
+    } catch (error) { notice(friendlyError(error), true); return; }
+  }
+  closeModal(); openReaderNow();
+}
+function openReader() { openObservations(); }
+function openReaderNow() {
   const record = currentRep(); if (!record) return;
   stopScroll();
   const paper = byId("paper"); paper.innerHTML = "";
@@ -397,6 +430,64 @@ function chooseColor(color, button) {
   if (button) button.classList.add("selected");
 }
 function applyHighlightColor(color, button) { chooseColor(color, button); applyHighlight(); }
+function selectedTextRanges(editor, range) {
+  const ranges = [], walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+  let textNode;
+  while ((textNode = walker.nextNode())) {
+    const length = textNode.textContent.length;
+    if (!length) continue;
+    const compareAt = offset => range.comparePoint(textNode, offset);
+    if (compareAt(0) === 1 || compareAt(length) === -1) continue;
+    let start = 0, end = length;
+    if (compareAt(0) === -1) {
+      let low = 0, high = length;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (compareAt(middle) === -1) low = middle + 1; else high = middle;
+      }
+      start = low;
+    }
+    if (compareAt(length) === 1) {
+      let low = 0, high = length;
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (compareAt(middle) === 1) high = middle - 1; else low = middle;
+      }
+      end = low;
+    }
+    if (end > start) {
+      const part = document.createRange(); part.setStart(textNode, start); part.setEnd(textNode, end);
+      ranges.push(part);
+    }
+  }
+  return ranges;
+}
+function wrapSelectedText(className, backgroundColor = "") {
+  if (!editMode || !selectedRange) { notice("Selecione um trecho com o mouse primeiro.", true); return; }
+  const range = selectedRange.cloneRange(), node = range.startContainer;
+  const editor = (node.nodeType === 1 ? node : node.parentElement)?.closest('.readbody[contenteditable="true"]');
+  if (!editor || range.collapsed) { notice("Selecione um trecho de letra ou cifra.", true); return; }
+  try {
+    const textRanges = selectedTextRanges(editor, range);
+    if (!textRanges.length) { notice("Não encontrei texto selecionado para formatar.", true); return; }
+    const wrappers = [];
+    for (const part of textRanges.reverse()) {
+      const wrapper = document.createElement("span"); wrapper.className = className;
+      if (backgroundColor) wrapper.style.backgroundColor = backgroundColor;
+      wrapper.appendChild(part.extractContents()); part.insertNode(wrapper); wrappers.unshift(wrapper);
+    }
+    const selection = window.getSelection(); selection.removeAllRanges();
+    const next = document.createRange(); next.setStartBefore(wrappers[0]); next.setEndAfter(wrappers[wrappers.length - 1]);
+    selection.addRange(next); selectedRange = next.cloneRange();
+  } catch { notice("Não consegui formatar esse trecho. Selecione-o novamente.", true); }
+}
+const textColorClasses = new Set(["lyric-color-red", "lyric-color-blue", "lyric-color-green", "lyric-color-purple", "lyric-color-orange", "lyric-color-black"]);
+function applyTextColor(colorClass, button) {
+  if (!textColorClasses.has(colorClass)) return;
+  document.querySelectorAll(".text-color-swatch").forEach(item => item.classList.remove("selected"));
+  if (button) button.classList.add("selected");
+  wrapSelectedText(colorClass);
+}
 document.addEventListener("selectionchange", () => {
   if (!editMode) return;
   const selection = window.getSelection(); if (!selection?.rangeCount) return;
@@ -405,51 +496,7 @@ document.addEventListener("selectionchange", () => {
   if (element?.closest('.readbody[contenteditable="true"]')) selectedRange = selection.getRangeAt(0).cloneRange();
 });
 function applyHighlight() {
-  if (!editMode || !selectedRange) { notice("Selecione um trecho com o mouse e escolha uma cor.", true); return; }
-  const range = selectedRange.cloneRange(), node = range.startContainer;
-  const editor = (node.nodeType === 1 ? node : node.parentElement)?.closest('.readbody[contenteditable="true"]');
-  if (!editor || range.collapsed) { notice("Selecione um trecho de letra ou cifra com o mouse.", true); return; }
-  try {
-    const textRanges = [];
-    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
-    let textNode;
-    while ((textNode = walker.nextNode())) {
-      const length = textNode.textContent.length;
-      if (!length) continue;
-      const compareAt = offset => range.comparePoint(textNode, offset);
-      if (compareAt(0) === 1 || compareAt(length) === -1) continue;
-      let start = 0, end = length;
-      if (compareAt(0) === -1) {
-        let low = 0, high = length;
-        while (low < high) {
-          const middle = Math.floor((low + high) / 2);
-          if (compareAt(middle) === -1) low = middle + 1; else high = middle;
-        }
-        start = low;
-      }
-      if (compareAt(length) === 1) {
-        let low = 0, high = length;
-        while (low < high) {
-          const middle = Math.ceil((low + high) / 2);
-          if (compareAt(middle) === 1) high = middle - 1; else low = middle;
-        }
-        end = low;
-      }
-      if (end > start) {
-        const part = document.createRange(); part.setStart(textNode, start); part.setEnd(textNode, end);
-        textRanges.push(part);
-      }
-    }
-    if (!textRanges.length) { notice("Não encontrei texto para marcar.", true); return; }
-    const marks = [];
-    for (const part of textRanges.reverse()) {
-      const mark = document.createElement("span"); mark.className = "marker"; mark.style.backgroundColor = markerColor;
-      mark.appendChild(part.extractContents()); part.insertNode(mark); marks.unshift(mark);
-    }
-    const selection = window.getSelection(); selection.removeAllRanges();
-    const next = document.createRange(); next.setStartBefore(marks[0]); next.setEndAfter(marks[marks.length - 1]);
-    selection.addRange(next); selectedRange = next.cloneRange();
-  } catch { notice("Não consegui marcar esse trecho. Tente selecionar novamente.", true); }
+  wrapSelectedText("marker", markerColor);
 }
 function clearHighlights() {
   if (!editMode) return;
@@ -523,7 +570,8 @@ Object.assign(window, {
   resendVerificationEmail,
   markCommentRead, deleteComment, openModal, closeModal, openReader, closeReader,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
-  changeReaderFont, formatSelectedText, topScroll, toggleScroll
+  changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll,
+  openObservations, saveObservations, startReader
 });
 window.addEventListener("error", event => console.error("Repertório:", event.message));
 FB.watchAuth(authUser => {
