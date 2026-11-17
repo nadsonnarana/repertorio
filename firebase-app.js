@@ -409,10 +409,29 @@ function applyHighlight() {
   const editor = (node.nodeType === 1 ? node : node.parentElement)?.closest('.readbody[contenteditable="true"]');
   if (!editor || range.collapsed) { notice("Selecione um trecho de letra ou cifra com o mouse.", true); return; }
   try {
-    const mark = document.createElement("span"); mark.className = "marker"; mark.style.backgroundColor = markerColor;
-    mark.appendChild(range.extractContents()); range.insertNode(mark);
-    const selection = window.getSelection(); selection.removeAllRanges(); const next = document.createRange(); next.selectNodeContents(mark); selection.addRange(next); selectedRange = next.cloneRange();
-  } catch { notice("Selecione o trecho dentro de uma única linha.", true); }
+    const textRanges = [];
+    const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+    let textNode;
+    while ((textNode = walker.nextNode())) {
+      if (!textNode.textContent.length) continue;
+      const nodeRange = document.createRange(); nodeRange.selectNodeContents(textNode);
+      if (range.compareBoundaryPoints(Range.END_TO_START, nodeRange) <= 0
+        || range.compareBoundaryPoints(Range.START_TO_END, nodeRange) >= 0) continue;
+      const part = range.cloneRange();
+      if (range.compareBoundaryPoints(Range.START_TO_START, nodeRange) <= 0) part.setStart(textNode, 0);
+      if (range.compareBoundaryPoints(Range.END_TO_END, nodeRange) >= 0) part.setEnd(textNode, textNode.textContent.length);
+      if (!part.collapsed) textRanges.push(part);
+    }
+    if (!textRanges.length) { notice("Não encontrei texto para marcar.", true); return; }
+    const marks = [];
+    for (const part of textRanges.reverse()) {
+      const mark = document.createElement("span"); mark.className = "marker"; mark.style.backgroundColor = markerColor;
+      mark.appendChild(part.extractContents()); part.insertNode(mark); marks.unshift(mark);
+    }
+    const selection = window.getSelection(); selection.removeAllRanges();
+    const next = document.createRange(); next.setStartBefore(marks[0]); next.setEndAfter(marks[marks.length - 1]);
+    selection.addRange(next); selectedRange = next.cloneRange();
+  } catch { notice("Não consegui marcar esse trecho. Tente selecionar novamente.", true); }
 }
 function formatSelectedText(command) {
   const record = currentRep();
