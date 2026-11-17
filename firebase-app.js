@@ -309,7 +309,7 @@ function syncReaderFont() {
   const paper = byId("paper");
   if (readerFontSize === null) readerFontSize = Number.parseFloat(getComputedStyle(paper).fontSize) || 15;
   paper.style.fontSize = readerFontSize + "px";
-  byId("fontSizeLabel").textContent = Math.round(readerFontSize) + " px";
+  if (byId("fontSizeLabel")) byId("fontSizeLabel").textContent = Math.round(readerFontSize) + " px";
 }
 function changeReaderFont(amount) {
   if (readerFontSize === null) syncReaderFont();
