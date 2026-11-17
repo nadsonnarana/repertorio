@@ -18,6 +18,8 @@ const byId = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const currentRep = () => data.find(item => item.id === activeId);
 const normalized = value => String(value || "").trim().toLowerCase();
+const siteOwnerEmail = "nadsonp850@gmail.com";
+const isSiteOwner = () => normalized(user?.email) === siteOwnerEmail;
 
 function notice(message, error = false) {
   const box = byId("appNotice");
@@ -47,7 +49,7 @@ function showLogin(message = "") {
   activeId = null;
   data = [];
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
-  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição por e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resendVerificationEmail()" data-busy-button="true">Reenviar confirmação</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
+  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resendVerificationEmail()" data-busy-button="true">Reenviar confirmação</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
   byId("loginForm").addEventListener("submit", event => { event.preventDefault(); loginAccount(); });
 }
 async function loginAccount() {
@@ -111,7 +113,8 @@ async function reloadData() {
   const docs = await FB.listRepertoires();
   let cleanedLegacyEmails = false;
   const preparedDocs = await Promise.all(docs.map(async item => {
-    const needsCleanup = item.ownerUid === user.uid && (
+    const itemIsOwner = item.ownerUid === user.uid || isSiteOwner();
+    const needsCleanup = itemIsOwner && (
       Object.prototype.hasOwnProperty.call(item, "ownerEmail")
       || Object.prototype.hasOwnProperty.call(item, "memberEmails")
       || Object.prototype.hasOwnProperty.call(item, "editorEmails")
@@ -126,7 +129,7 @@ async function reloadData() {
     return item;
   }));
   const loaded = await Promise.all(preparedDocs.map(async item => {
-    const isOwner = item.ownerUid === user.uid;
+    const isOwner = item.ownerUid === user.uid || isSiteOwner();
     const editorEmails = isOwner ? await FB.listEditorAccess(item.id) : [];
     const canEdit = isOwner || await FB.hasEditorAccess(item.id);
     const songs = await FB.listSongs(item.id);

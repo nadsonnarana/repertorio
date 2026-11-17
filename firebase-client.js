@@ -36,6 +36,7 @@ const requireSignedIn = () => {
   return auth.currentUser;
 };
 const normalizeEmail = email => String(email || "").trim().toLowerCase();
+const siteOwnerEmail = "nadsonp850@gmail.com";
 const allowedEmailDomains = new Set(["gmail.com", "hotmail.com", "icloud.com"]);
 function assertAllowedEmail(email) {
   const domain = normalizeEmail(email).split("@").pop();
@@ -133,7 +134,9 @@ export async function createRepertoire(name) {
 }
 export async function secureLegacyRepertoire(repertoireId, previousData) {
   const user = requireSignedIn();
-  if (previousData.ownerUid !== user.uid) throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
+  if (previousData.ownerUid !== user.uid && normalizeEmail(user.email) !== siteOwnerEmail) {
+    throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
+  }
   return updateDoc(doc(db, "repertoires", repertoireId), {
     publicRead: true,
     ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
