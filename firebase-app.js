@@ -18,6 +18,8 @@ const byId = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
 const currentRep = () => data.find(item => item.id === activeId);
 const normalized = value => String(value || "").trim().toLowerCase();
+const siteOwnerEmail = "nadsonp850@gmail.com";
+const isSiteOwner = () => normalized(user?.email) === siteOwnerEmail;
 
 function notice(message, error = false) {
   const box = byId("appNotice");
@@ -47,7 +49,7 @@ function showLogin(message = "") {
   activeId = null;
   data = [];
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
-  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição por e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resendVerificationEmail()" data-busy-button="true">Reenviar confirmação</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
+  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resendVerificationEmail()" data-busy-button="true">Reenviar confirmação</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
   byId("loginForm").addEventListener("submit", event => { event.preventDefault(); loginAccount(); });
 }
 async function loginAccount() {
@@ -111,7 +113,8 @@ async function reloadData() {
   const docs = await FB.listRepertoires();
   let cleanedLegacyEmails = false;
   const preparedDocs = await Promise.all(docs.map(async item => {
-    const needsCleanup = item.ownerUid === user.uid && (
+    const itemIsOwner = item.ownerUid === user.uid || isSiteOwner();
+    const needsCleanup = itemIsOwner && (
       Object.prototype.hasOwnProperty.call(item, "ownerEmail")
       || Object.prototype.hasOwnProperty.call(item, "memberEmails")
       || Object.prototype.hasOwnProperty.call(item, "editorEmails")
@@ -126,7 +129,7 @@ async function reloadData() {
     return item;
   }));
   const loaded = await Promise.all(preparedDocs.map(async item => {
-    const isOwner = item.ownerUid === user.uid;
+    const isOwner = item.ownerUid === user.uid || isSiteOwner();
     const editorEmails = isOwner ? await FB.listEditorAccess(item.id) : [];
     const canEdit = isOwner || await FB.hasEditorAccess(item.id);
     const songs = await FB.listSongs(item.id);
@@ -263,13 +266,13 @@ async function refreshDataForCurrent() {
 }
 async function confirmDeleteRep(id) {
   const record = data.find(item => item.id === id);
-  if (!record?.isOwner || !confirm('Apagar o repertório “' + record.name + '” e todas as músicas e comentários? Essa ação não pode ser desfeita.')) return;
+  if (!record?.isOwner || !await window.siteConfirm('Apagar o repertório “' + record.name + '” e todas as músicas e comentários? Essa ação não pode ser desfeita.', 'Apagar repertório')) return;
   try { await FB.deleteRepertoire(id); await reloadData(); activeId = null; renderHome(); }
   catch (error) { notice(friendlyError(error), true); }
 }
 async function confirmDeleteSong(index) {
   const record = currentRep(), song = record?.songs[index];
-  if (!record?.isOwner || !song || !confirm('Apagar a música “' + song.name + '” deste repertório? Essa ação não pode ser desfeita.')) return;
+  if (!record?.isOwner || !song || !await window.siteConfirm('Apagar a música “' + song.name + '” deste repertório? Essa ação não pode ser desfeita.', 'Apagar música')) return;
   try { await FB.deleteSong(record.id, song.id); await refreshDataForCurrent(); renderDetail(); }
   catch (error) { notice(friendlyError(error), true); }
 }
@@ -287,7 +290,7 @@ async function invite() {
 }
 async function removeMemberByEmail(index) {
   const record = currentRep(), email = record?.editorEmails[index];
-  if (!email || !confirm('Remover a permissão de edição de ' + email + '? A pessoa continuará podendo visualizar.')) return;
+  if (!email || !await window.siteConfirm('Remover a permissão de edição de ' + email + '? A pessoa continuará podendo visualizar.', 'Remover editor')) return;
   try { await FB.revokeEditorAccess(record.id, email); await refreshDataForCurrent(); shareRep(); }
   catch (error) { notice(friendlyError(error), true); }
 }
@@ -331,12 +334,12 @@ async function markCommentRead(index) {
   catch (error) { notice(friendlyError(error), true); }
 }
 async function deleteComment(index) {
-  const record = currentRep(), comment = record?.comments[index]; if (!comment || !confirm("Apagar este comentário?")) return;
+  const record = currentRep(), comment = record?.comments[index]; if (!comment || !await window.siteConfirm("Apagar este comentário?", "Apagar comentário")) return;
   try { await FB.deleteComment(record.id, comment.id); await refreshDataForCurrent(); openComments(); renderDetail(); }
   catch (error) { notice(friendlyError(error), true); }
 }
-function openModal(html) { byId("modal").innerHTML = html; byId("modalback").classList.add("open"); }
-function closeModal() { byId("modalback").classList.remove("open"); }
+function openModal(html) { byId("modal").removeAttribute("role"); byId("modal").removeAttribute("aria-modal"); byId("modal").innerHTML = html; byId("modalback").classList.add("open"); }
+function closeModal() { if (window.siteConfirmPending?.()) { window.resolveSiteConfirm(false); return; } byId("modalback").classList.remove("open"); }
 function openReader() {
   const record = currentRep(); if (!record) return;
   stopScroll();
