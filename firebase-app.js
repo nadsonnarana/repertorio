@@ -7,7 +7,8 @@ let busy = false;
 let editMode = false;
 let markerColor = "#fff2a8";
 let selectedRange = null;
-let scrollTimer = null;
+let scrollFrame = null;
+let scrollLastTime = 0;
 const sharedRouteId = new URLSearchParams(location.search).get("repertory");
 const appRoot = document.getElementById("app");
 const byId = id => document.getElementById(id);
@@ -32,8 +33,10 @@ function setBusy(value) {
 }
 function initials(name) { return String(name || "?").trim().split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase(); }
 function membersFor(record) {
-  const emails = Array.isArray(record.memberEmails) ? record.memberEmails : [];
-  return emails.map(email => ({ email, name: email === normalized(user?.email) ? (user?.displayName || email.split("@")[0]) : email.split("@")[0] }));
+  const ownerEmail = record.ownerEmail || "Dono do repertório";
+  const editors = Array.isArray(record.editorEmails) ? record.editorEmails : [];
+  return [{ email: ownerEmail, name: ownerEmail.includes("@") ? ownerEmail.split("@")[0] : ownerEmail, isOwner: true },
+    ...editors.map(email => ({ email, name: email.split("@")[0], isOwner: false }))];
 }
 function avatars(members) {
   return '<div class="faces">' + members.slice(0, 4).map(member => '<span class="face" title="' + escapeHtml(member.email) + '">' + escapeHtml(initials(member.name)) + '</span>').join("") + (members.length > 4 ? '<span class="face more">+' + (members.length - 4) + '</span>' : '') + '</div>';
@@ -42,7 +45,7 @@ function showLogin(message = "") {
   activeId = null;
   data = [];
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
-  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use o e-mail autorizado pelo dono do repertório. A confirmação do e-mail é necessária para proteger o acesso.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
+  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Entre ou crie uma conta para ver os repertórios. As cifras só podem ser editadas pelos e-mails designados pelo dono de cada repertório.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
   byId("loginForm").addEventListener("submit", event => { event.preventDefault(); loginAccount(); });
 }
 async function loginAccount() {
@@ -58,7 +61,7 @@ async function registerAccount() {
   try {
     await FB.registerAccount(byId("authEmail").value, byId("authPassword").value);
     await FB.logout();
-    showLogin("Conta criada. Confira seu e-mail e clique no link de confirmação; depois volte aqui para entrar.");
+    showLogin("Conta criada. Agora você pode entrar com esse e-mail e senha, sem confirmação por e-mail.");
   } catch (error) { notice(friendlyError(error), true); }
   finally { setBusy(false); }
 }
@@ -82,7 +85,7 @@ function friendlyError(error) {
     "auth/email-already-in-use": "Já existe uma conta com esse e-mail. Entre em vez de criar outra.",
     "auth/weak-password": "Use uma senha com pelo menos 6 caracteres.",
     "auth/invalid-email": "Confira o formato do e-mail.",
-    "permission-denied": "O Firebase negou esta ação. Confira se seu e-mail foi autorizado e se as regras do Firestore foram publicadas.",
+    "permission-denied": "O Firebase negou esta ação. Confira se você entrou na conta e se as regras do Firestore foram publicadas.",
     "unavailable": "O Firebase está temporariamente indisponível. Tente novamente."
   };
   return messages[code] || error?.message || "Não foi possível concluir. Tente novamente.";
@@ -92,6 +95,8 @@ async function reloadData() {
   const docs = await FB.listRepertoires();
   const loaded = await Promise.all(docs.map(async item => {
     const isOwner = item.ownerUid === user.uid;
+    const editorEmails = Array.isArray(item.editorEmails) ? item.editorEmails : [];
+    const canEdit = isOwner || editorEmails.some(email => normalized(email) === normalized(user.email));
     const songs = await FB.listSongs(item.id);
     const comments = isOwner ? await FB.listComments(item.id) : [];
     return {
@@ -99,7 +104,8 @@ async function reloadData() {
       name: item.name || "Repertório sem nome",
       ownerUid: item.ownerUid,
       isOwner,
-      memberEmails: item.memberEmails || [],
+      canEdit,
+      editorEmails,
       members: membersFor(item),
       songs: songs.map(song => ({ id: song.id, name: song.title, key: song.key || "—", body: song.body || "", bodyHtml: song.bodyHtml || "", order: song.order || 0 })),
       comments
@@ -111,7 +117,6 @@ async function reloadData() {
 async function bootUser(authUser) {
   user = authUser;
   if (!user) { showLogin(); return; }
-  if (!user.emailVerified) { showLogin("Confirme o endereço de e-mail pelo link recebido antes de entrar."); return; }
   byId("barInfo").innerHTML = '<span class="userpill">' + escapeHtml(user.email) + '</span><button class="btn" style="padding:6px 9px;font-size:10px" onclick="logoutUser()">Sair</button>';
   appRoot.innerHTML = '<div class="loading">Carregando seus repertórios…</div>';
   try {
@@ -119,7 +124,7 @@ async function bootUser(authUser) {
     if (sharedRouteId) {
       const target = data.find(item => item.id === sharedRouteId);
       if (target) { openRep(target.id); return; }
-      appRoot.innerHTML = '<div class="empty">Este link não dá acesso a um repertório disponível para esta conta. Entre com o e-mail autorizado.</div>';
+      appRoot.innerHTML = '<div class="empty">Este repertório não foi encontrado. Entre em uma conta para visualizar os repertórios disponíveis.</div>';
       return;
     }
     renderHome();
@@ -140,7 +145,7 @@ function renderHome() {
     const card = document.createElement("article");
     card.className = "repcard";
     card.onclick = () => openRep(record.id);
-    card.innerHTML = '<div class="rephead"><div><h2>' + escapeHtml(record.name) + '</h2><p>' + record.songs.length + ' músicas · ' + record.members.length + ' pessoas com acesso</p></div><span class="repicon">▤</span></div><div class="repfoot">' + avatars(record.members) + '<span class="statsmall">Abrir repertório →</span></div>';
+      card.innerHTML = '<div class="rephead"><div><h2>' + escapeHtml(record.name) + '</h2><p>' + record.songs.length + ' músicas · visualização para todos · ' + record.editorEmails.length + ' editor(es)</p></div><span class="repicon">▤</span></div><div class="repfoot">' + avatars(record.members) + '<span class="statsmall">Abrir repertório →</span></div>';
     if (record.isOwner) {
       const del = document.createElement("button"); del.className = "delete-action"; del.textContent = "Apagar repertório";
       del.onclick = event => { event.stopPropagation(); confirmDeleteRep(record.id); };
@@ -163,18 +168,18 @@ function renderDetail() {
   const record = currentRep();
   if (!record) { renderHome(); return; }
   const owner = record.isOwner;
-  const detailActions = owner
-    ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button><button class="btn" onclick="shareRep()">↗ Compartilhar acesso</button><button class="btn primary" onclick="addSong()">＋ Adicionar música</button><button class="btn danger" onclick="confirmDeleteRep(\'' + record.id + '\')">Apagar</button>'
-    : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>';
-  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'só você pode editar' : 'somente leitura e comentários') + '</p></div><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div><section class="panel"><h2>Pessoas com acesso</h2><div class="memberline">' + avatars(record.members) + '<span class="muted">' + record.members.length + ' pessoas</span>' + (owner ? '<button class="btn" onclick="shareRep()">Adicionar pessoa</button>' : '') + '</div></section>' + (owner ? '<section class="panel"><h2>Ideias de acordes de ligação</h2><div class="muted">Escolha os tons de saída e chegada para gerar caminhos harmônicos.</div><div class="toolrow"><label class="field">Tom que termina<select id="from"></select></label><span style="padding-bottom:8px;color:#9aa49c">→</span><label class="field">Tom que começa<select id="to"></select></label><button class="btn primary" onclick="generate()">Gerar ideias</button></div><div class="result" id="result"></div></section>' : '') + '<section class="panel"><h2>Músicas neste repertório</h2><div class="songlist" id="songlist"></div></section>';
+  const detailActions = (owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button><button class="btn" onclick="shareRep()">✎ Designar editores</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>')
+    + (record.canEdit ? '<button class="btn primary" onclick="addSong()">＋ Adicionar música</button>' : '')
+    + (owner ? '<button class="btn danger" onclick="confirmDeleteRep(\'' + record.id + '\')">Apagar</button>' : '');
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Todas as contas podem visualizar. Edição liberada para o dono e os e-mails designados.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + record.editorEmails.length + ' editor(es)</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section><section class="panel"><h2>Ideias de acordes de ligação</h2><div class="muted">Escolha os tons de saída e chegada para gerar caminhos harmônicos.</div><div class="toolrow"><label class="field">Tom que termina<select id="from"></select></label><span style="padding-bottom:8px;color:#9aa49c">→</span><label class="field">Tom que começa<select id="to"></select></label><button class="btn primary" onclick="generate()">Gerar ideias</button></div><div class="result" id="result"></div></section><section class="panel"><h2>Músicas neste repertório</h2><div class="songlist" id="songlist"></div></section>';
   const list = byId("songlist");
   if (!record.songs.length) list.innerHTML = '<div class="empty">Este repertório ainda não tem músicas.</div>';
   record.songs.forEach((song, index) => {
     const row = document.createElement("div"); row.className = "songitem";
-    row.innerHTML = '<span class="songnum">' + String(index + 1).padStart(2, "0") + '</span><span class="disc">♫</span><div><strong>' + escapeHtml(song.name) + '</strong><small>Tom: ' + escapeHtml(song.key) + '</small></div><div class="right"><span class="tag">' + escapeHtml(song.key) + '</span>' + (owner ? '<button class="btn" onclick="editSong(' + index + ')">Editar</button><button class="btn danger" onclick="confirmDeleteSong(' + index + ')">Apagar</button>' : '') + '</div>';
+    row.innerHTML = '<span class="songnum">' + String(index + 1).padStart(2, "0") + '</span><span class="disc">♫</span><div><strong>' + escapeHtml(song.name) + '</strong><small>Tom: ' + escapeHtml(song.key) + '</small></div><div class="right"><span class="tag">' + escapeHtml(song.key) + '</span>' + (record.canEdit ? '<button class="btn" onclick="editSong(' + index + ')">Editar</button>' : '') + (owner ? '<button class="btn danger" onclick="confirmDeleteSong(' + index + ')">Apagar</button>' : '') + '</div>';
     list.appendChild(row);
   });
-  if (owner) initGenerator(record);
+  initGenerator(record);
 }
 async function refreshCurrent() {
   try { await reloadData(); renderDetail(); }
@@ -190,6 +195,7 @@ async function createRep() {
   catch (error) { notice(friendlyError(error), true); }
 }
 function addSong() {
+  if (!currentRep()?.canEdit) return;
   openModal('<h2>Adicionar música</h2><p>Letra e cifra vão ficar salvas no Firestore.</p><input id="songname" placeholder="Nome da música" maxlength="160"><input id="songkey" placeholder="Tom (ex.: G, Am, Bb)" maxlength="12"><textarea id="songbody" placeholder="[Intro] G D Em C\n\n[Verso]\n[ G ] Escreva a letra com os acordes entre colchetes..."></textarea><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="saveSong()">Adicionar</button></div>');
 }
 async function saveSong() {
@@ -198,8 +204,9 @@ async function saveSong() {
   catch (error) { notice(friendlyError(error), true); }
 }
 function editSong(index) {
+  if (!currentRep()?.canEdit) return;
   const song = currentRep().songs[index];
-  openModal('<h2>Editar música</h2><p>Somente o dono do repertório pode editar.</p><input id="songname" value="' + escapeHtml(song.name) + '" maxlength="160"><input id="songkey" value="' + escapeHtml(song.key) + '" maxlength="12"><textarea id="songbody">' + escapeHtml(song.body) + '</textarea><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="updateSong(' + index + ')">Salvar</button></div>');
+  openModal('<h2>Editar música</h2><p>O dono e os editores designados podem editar músicas e cifras.</p><input id="songname" value="' + escapeHtml(song.name) + '" maxlength="160"><input id="songkey" value="' + escapeHtml(song.key) + '" maxlength="12"><textarea id="songbody">' + escapeHtml(song.body) + '</textarea><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="updateSong(' + index + ')">Salvar</button></div>');
 }
 async function updateSong(index) {
   const record = currentRep(), song = record.songs[index];
@@ -225,26 +232,27 @@ async function confirmDeleteSong(index) {
 }
 function shareRep() {
   const record = currentRep(); if (!record?.isOwner) return;
-  const members = record.members.map((member, index) => '<div class="person"><span class="face">' + escapeHtml(initials(member.name)) + '</span><div><div style="font-size:11px;font-weight:650">' + escapeHtml(member.name) + '</div><div class="email">' + escapeHtml(member.email) + '</div></div>' + (normalized(member.email) === normalized(user.email) ? '<span class="email">Dono</span>' : '<button onclick="removeMemberByEmail(' + index + ')">Remover</button>') + '</div>').join('');
-  openModal('<h2>Compartilhar ' + escapeHtml(record.name) + '</h2><p>Autorize pelo e-mail usado na conta Firebase. Integrantes poderão ler e comentar, sem editar cifras.</p><input id="personemail" type="email" placeholder="E-mail do integrante"><div class="modalfoot" style="justify-content:space-between"><button class="btn" onclick="copyLink()">Copiar link deste repertório</button><button class="btn primary" onclick="invite()">Adicionar acesso</button></div><div class="linkbox" id="linkbox">O link só funcionará para um e-mail autorizado e confirmado.</div><div class="sharelist">' + members + '</div>');
+  const members = record.members.map((member, index) => '<div class="person"><span class="face">' + escapeHtml(initials(member.name)) + '</span><div><div style="font-size:11px;font-weight:650">' + escapeHtml(member.name) + '</div><div class="email">' + escapeHtml(member.email) + '</div></div>' + (member.isOwner ? '<span class="email">Dono</span>' : '<button onclick="removeMemberByEmail(' + index + ')">Remover editor</button>') + '</div>').join('');
+  openModal('<h2>Editar acesso · ' + escapeHtml(record.name) + '</h2><p>Qualquer conta pode visualizar este repertório. Informe um e-mail para liberar edição das músicas e cifras. Só você pode apagar músicas ou repertórios e designar editores.</p><input id="personemail" type="email" placeholder="E-mail do editor"><div class="modalfoot" style="justify-content:space-between"><button class="btn" onclick="copyLink()">Copiar link do repertório</button><button class="btn primary" onclick="invite()">Liberar edição</button></div><div class="linkbox" id="linkbox">A pessoa precisa entrar no site com o e-mail designado.</div><h3>Editores designados</h3><div class="sharelist">' + members + '</div>');
 }
 async function invite() {
   const record = currentRep(), email = normalized(byId("personemail").value);
   if (!email || !email.includes("@")) { notice("Digite um endereço de e-mail válido.", true); return; }
-  try { await FB.grantRepertoireAccess(record.id, email); await refreshDataForCurrent(); shareRep(); notice("Acesso autorizado. Envie o link ao integrante; ele precisa criar uma conta com esse e-mail e confirmar o endereço."); }
+  if (email === normalized(user.email)) { notice("Seu e-mail já é o dono deste repertório.", true); return; }
+  try { await FB.grantEditorAccess(record.id, email); await refreshDataForCurrent(); shareRep(); notice("Edição liberada para esse e-mail. Envie o link do repertório."); }
   catch (error) { notice(friendlyError(error), true); }
 }
 async function removeMemberByEmail(index) {
   const record = currentRep(), member = record.members[index];
-  if (!member || normalized(member.email) === normalized(user.email)) return;
-  if (!confirm('Remover o acesso de ' + member.email + '?')) return;
-  try { await FB.revokeRepertoireAccess(record.id, member.email); await refreshDataForCurrent(); shareRep(); }
+  if (!member || member.isOwner) return;
+  if (!confirm('Remover a permissão de edição de ' + member.email + '? A pessoa continuará podendo visualizar.')) return;
+  try { await FB.revokeEditorAccess(record.id, member.email); await refreshDataForCurrent(); shareRep(); }
   catch (error) { notice(friendlyError(error), true); }
 }
 async function copyLink() {
   const target = new URL(location.href); target.search = ""; target.searchParams.set("repertory", activeId);
   const link = target.href; byId("linkbox").textContent = link;
-  try { await navigator.clipboard.writeText(link); notice("Link copiado. Só contas com e-mail autorizado poderão abrir."); }
+  try { await navigator.clipboard.writeText(link); notice("Link copiado. Qualquer pessoa com conta poderá visualizar o repertório."); }
   catch { notice("Link gerado. Selecione e copie o endereço exibido."); }
 }
 function openCommentForm() {
@@ -287,15 +295,15 @@ function openReader() {
     if (index < record.songs.length - 1) { const gap = document.createElement("div"); gap.className = "readgap"; paper.appendChild(gap); }
   });
   byId("readCount").textContent = "· " + record.songs.length + " músicas · " + record.name;
-  byId("area").scrollTop = 0; byId("editToggle").hidden = !record.isOwner;
+  byId("area").scrollTop = 0; byId("editToggle").hidden = !record.canEdit;
   byId("editbar").style.display = "none"; editMode = false;
   byId("full").classList.add("open"); document.body.style.overflow = "hidden";
-  setTimeout(() => { if (byId("full").classList.contains("open") && !scrollTimer) toggleScroll(); }, 450);
+  setTimeout(() => { if (byId("full").classList.contains("open") && scrollFrame === null) toggleScroll(); }, 450);
 }
 function plainToHtml(text) { return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? escapeHtml(line) : "<br>") + "</div>").join(""); }
 function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; }
 function toggleEdit() {
-  const record = currentRep(); if (!record?.isOwner) return;
+  const record = currentRep(); if (!record?.canEdit) return;
   if (editMode) { saveReaderEdits(); return; }
   editMode = true; stopScroll(); document.querySelectorAll(".readbody").forEach(body => body.contentEditable = "true");
   byId("editbar").style.display = "flex"; byId("editToggle").textContent = "✎ Editando";
@@ -303,6 +311,7 @@ function toggleEdit() {
 async function saveReaderEdits() {
   if (!editMode) return;
   const record = currentRep();
+  if (!record?.canEdit) { editMode = false; notice("Você não tem permissão para editar este repertório.", true); return; }
   try {
     await Promise.all([...document.querySelectorAll(".readbody")].map((body, index) => {
       const song = record.songs[index]; song.bodyHtml = body.innerHTML; song.body = body.innerText;
@@ -337,12 +346,22 @@ function applyHighlight() {
 }
 function topScroll() { byId("area").scrollTo({ top: 0, behavior: "smooth" }); }
 function toggleScroll() {
-  if (scrollTimer) { stopScroll(); return; }
+  if (scrollFrame !== null) { stopScroll(); return; }
   byId("play").textContent = "Ⅱ Pausar";
-  const speed = Number(byId("speed").value);
-  scrollTimer = setInterval(() => { const area = byId("area"); area.scrollTop += speed / 20; if (area.scrollTop + area.clientHeight >= area.scrollHeight - 1) stopScroll(); }, 50);
+  scrollLastTime = 0;
+  const advance = now => {
+    if (!byId("full").classList.contains("open")) { stopScroll(); return; }
+    if (!scrollLastTime) scrollLastTime = now;
+    const elapsed = Math.min(now - scrollLastTime, 80);
+    scrollLastTime = now;
+    const area = byId("area");
+    area.scrollTop += Number(byId("speed").value) * elapsed / 1000;
+    if (area.scrollTop + area.clientHeight >= area.scrollHeight - 1) { stopScroll(); return; }
+    scrollFrame = requestAnimationFrame(advance);
+  };
+  scrollFrame = requestAnimationFrame(advance);
 }
-function stopScroll() { if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; } if (byId("play")) byId("play").textContent = "▶ Iniciar rolagem"; }
+function stopScroll() { if (scrollFrame !== null) { cancelAnimationFrame(scrollFrame); scrollFrame = null; } scrollLastTime = 0; if (byId("play")) byId("play").textContent = "▶ Rolar"; }
 function initGenerator(record) {
   if (!window.generate || !byId("from")) return;
   const keys = ["C","C#","Db","D","Eb","E","F","F#","G","Ab","A","Bb","B","Am","Bbm","Bm","Cm","C#m","Dm","Ebm","Em","Fm","F#m","Gm","G#m"];
@@ -363,4 +382,6 @@ Object.assign(window, {
 });
 window.addEventListener("error", event => console.error("Repertório:", event.message));
 FB.watchAuth(authUser => { bootUser(authUser); });
+
+
 

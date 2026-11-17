@@ -3,7 +3,6 @@ import {
   getAuth,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
-  sendEmailVerification,
   sendPasswordResetEmail,
   signOut,
   onAuthStateChanged
@@ -39,15 +38,10 @@ const normalizeEmail = email => String(email || "").trim().toLowerCase();
 
 export async function registerAccount(email, password) {
   const credential = await createUserWithEmailAndPassword(auth, normalizeEmail(email), password);
-  await sendEmailVerification(credential.user);
   return credential.user;
 }
 export async function login(email, password) {
   const credential = await signInWithEmailAndPassword(auth, normalizeEmail(email), password);
-  if (!credential.user.emailVerified) {
-    await signOut(auth);
-    throw new Error("Confirme seu e-mail pelo link enviado antes de entrar.");
-  }
   return credential.user;
 }
 export async function resetPassword(email) {
@@ -58,21 +52,15 @@ export function watchAuth(callback) { return onAuthStateChanged(auth, callback);
 
 // Modelo: repertoires/{id}, repertoires/{id}/songs/{songId}, comments/{commentId}.
 export async function listRepertoires() {
-  const user = requireSignedIn();
-  if (!user.emailVerified) throw new Error("Seu e-mail precisa estar confirmado.");
-  const ownerQuery = query(collection(db, "repertoires"), where("ownerUid", "==", user.uid));
-  const memberQuery = query(collection(db, "repertoires"), where("memberEmails", "array-contains", normalizeEmail(user.email)));
-  const [owned, shared] = await Promise.all([getDocs(ownerQuery), getDocs(memberQuery)]);
-  const byId = new Map();
-  [...owned.docs, ...shared.docs].forEach(snap => byId.set(snap.id, { id: snap.id, ...snap.data() }));
-  return [...byId.values()];
+  requireSignedIn();
+  const snap = await getDocs(collection(db, "repertoires"));
+  return snap.docs.map(item => ({ id: item.id, ...item.data() }));
 }
 export async function createRepertoire(name) {
   const user = requireSignedIn();
-  if (!user.emailVerified) throw new Error("Confirme seu e-mail antes de criar repertórios.");
   const ref = await addDoc(collection(db, "repertoires"), {
-    name: String(name).trim(), ownerUid: user.uid,
-    memberEmails: [normalizeEmail(user.email)], createdAt: serverTimestamp()
+    name: String(name).trim(), ownerUid: user.uid, ownerEmail: normalizeEmail(user.email),
+    editorEmails: [], createdAt: serverTimestamp()
   });
   return ref.id;
 }
@@ -90,19 +78,19 @@ export async function deleteRepertoire(repertoireId) {
   }
   return deleteDoc(doc(db, "repertoires", repertoireId));
 }
-export async function grantRepertoireAccess(repertoireId, email) {
+export async function grantEditorAccess(repertoireId, email) {
   requireSignedIn();
   return updateDoc(doc(db, "repertoires", repertoireId), {
-    memberEmails: arrayUnion(normalizeEmail(email))
+    editorEmails: arrayUnion(normalizeEmail(email))
   });
 }
-export async function revokeRepertoireAccess(repertoireId, email) {
+export async function revokeEditorAccess(repertoireId, email) {
   requireSignedIn();
   const normalized = normalizeEmail(email);
   const user = requireSignedIn();
   if (normalized === normalizeEmail(user.email)) throw new Error("O dono não pode remover a própria conta.");
   return updateDoc(doc(db, "repertoires", repertoireId), {
-    memberEmails: arrayRemove(normalized)
+    editorEmails: arrayRemove(normalized)
   });
 }
 export async function listSongs(repertoireId) {
@@ -135,7 +123,6 @@ export async function deleteSong(repertoireId, songId) {
 }
 export async function addComment(repertoireId, text, authorName) {
   const user = requireSignedIn();
-  if (!user.emailVerified) throw new Error("Confirme seu e-mail antes de comentar.");
   return addDoc(collection(db, "repertoires", repertoireId, "comments"), {
     authorUid: user.uid, authorEmail: normalizeEmail(user.email),
     authorName: String(authorName || user.displayName || "Integrante").trim(),
@@ -156,6 +143,9 @@ export async function deleteComment(repertoireId, commentId) {
   requireSignedIn();
   return deleteDoc(doc(db, "repertoires", repertoireId, "comments", commentId));
 }
+
+
+
 
 
 
