@@ -7,8 +7,10 @@ let busy = false;
 let editMode = false;
 let markerColor = "#fff2a8";
 let selectedRange = null;
-let scrollFrame = null;
+let scrollTimer = null;
 let scrollLastTime = 0;
+let scrollRemainder = 0;
+let screenWakeLock = null;
 const sharedRouteId = new URLSearchParams(location.search).get("repertory");
 const appRoot = document.getElementById("app");
 const byId = id => document.getElementById(id);
@@ -285,6 +287,7 @@ function openModal(html) { byId("modal").innerHTML = html; byId("modalback").cla
 function closeModal() { byId("modalback").classList.remove("open"); }
 function openReader() {
   const record = currentRep(); if (!record) return;
+  stopScroll();
   const paper = byId("paper"); paper.innerHTML = "";
   record.songs.forEach((song, index) => {
     const section = document.createElement("section"); section.className = "readsong";
@@ -298,7 +301,7 @@ function openReader() {
   byId("area").scrollTop = 0; byId("editToggle").hidden = !record.canEdit;
   byId("editbar").style.display = "none"; editMode = false;
   byId("full").classList.add("open"); document.body.style.overflow = "hidden";
-  setTimeout(() => { if (byId("full").classList.contains("open") && scrollFrame === null) toggleScroll(); }, 450);
+  byId("play").textContent = "▶ Iniciar rolagem";
 }
 function plainToHtml(text) { return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? escapeHtml(line) : "<br>") + "</div>").join(""); }
 function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; }
@@ -346,22 +349,33 @@ function applyHighlight() {
 }
 function topScroll() { byId("area").scrollTo({ top: 0, behavior: "smooth" }); }
 function toggleScroll() {
-  if (scrollFrame !== null) { stopScroll(); return; }
-  byId("play").textContent = "Ⅱ Pausar";
+  if (scrollTimer !== null) { stopScroll(); return; }
+  byId("play").textContent = "Ⅱ Pausar rolagem";
   scrollLastTime = 0;
-  const advance = now => {
+  scrollRemainder = 0;
+  if ("wakeLock" in navigator) navigator.wakeLock.request("screen").then(lock => { screenWakeLock = lock; }).catch(() => {});
+  scrollTimer = setInterval(() => {
     if (!byId("full").classList.contains("open")) { stopScroll(); return; }
-    if (!scrollLastTime) scrollLastTime = now;
-    const elapsed = Math.min(now - scrollLastTime, 80);
+    const now = performance.now();
+    if (!scrollLastTime) { scrollLastTime = now; return; }
+    const elapsed = Math.min(now - scrollLastTime, 120);
     scrollLastTime = now;
     const area = byId("area");
-    area.scrollTop += Number(byId("speed").value) * elapsed / 1000;
-    if (area.scrollTop + area.clientHeight >= area.scrollHeight - 1) { stopScroll(); return; }
-    scrollFrame = requestAnimationFrame(advance);
-  };
-  scrollFrame = requestAnimationFrame(advance);
+    scrollRemainder += Number(byId("speed").value) * elapsed / 1000;
+    const pixels = Math.floor(scrollRemainder);
+    if (pixels > 0) {
+      area.scrollTop = area.scrollTop + pixels;
+      scrollRemainder -= pixels;
+    }
+    if (area.scrollTop + area.clientHeight >= area.scrollHeight - 1) stopScroll();
+  }, 30);
 }
-function stopScroll() { if (scrollFrame !== null) { cancelAnimationFrame(scrollFrame); scrollFrame = null; } scrollLastTime = 0; if (byId("play")) byId("play").textContent = "▶ Rolar"; }
+function stopScroll() {
+  if (scrollTimer !== null) { clearInterval(scrollTimer); scrollTimer = null; }
+  scrollLastTime = 0; scrollRemainder = 0;
+  if (screenWakeLock) { screenWakeLock.release().catch(() => {}); screenWakeLock = null; }
+  if (byId("play")) byId("play").textContent = "▶ Iniciar rolagem";
+}
 function initGenerator(record) {
   if (!window.generate || !byId("from")) return;
   const keys = ["C","C#","Db","D","Eb","E","F","F#","G","Ab","A","Bb","B","Am","Bbm","Bm","Cm","C#m","Dm","Ebm","Em","Fm","F#m","Gm","G#m"];
