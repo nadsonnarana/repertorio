@@ -400,6 +400,7 @@ function applyHighlightColor(color, button) { chooseColor(color, button); applyH
 document.addEventListener("selectionchange", () => {
   if (!editMode) return;
   const selection = window.getSelection(); if (!selection?.rangeCount) return;
+  if (selection.isCollapsed) return;
   const node = selection.anchorNode, element = node && (node.nodeType === 1 ? node : node.parentElement);
   if (element?.closest('.readbody[contenteditable="true"]')) selectedRange = selection.getRangeAt(0).cloneRange();
 });
@@ -413,14 +414,31 @@ function applyHighlight() {
     const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
     let textNode;
     while ((textNode = walker.nextNode())) {
-      if (!textNode.textContent.length) continue;
-      const nodeRange = document.createRange(); nodeRange.selectNodeContents(textNode);
-      if (range.compareBoundaryPoints(Range.END_TO_START, nodeRange) <= 0
-        || range.compareBoundaryPoints(Range.START_TO_END, nodeRange) >= 0) continue;
-      const part = range.cloneRange();
-      if (range.compareBoundaryPoints(Range.START_TO_START, nodeRange) <= 0) part.setStart(textNode, 0);
-      if (range.compareBoundaryPoints(Range.END_TO_END, nodeRange) >= 0) part.setEnd(textNode, textNode.textContent.length);
-      if (!part.collapsed) textRanges.push(part);
+      const length = textNode.textContent.length;
+      if (!length) continue;
+      const compareAt = offset => range.comparePoint(textNode, offset);
+      if (compareAt(0) === 1 || compareAt(length) === -1) continue;
+      let start = 0, end = length;
+      if (compareAt(0) === -1) {
+        let low = 0, high = length;
+        while (low < high) {
+          const middle = Math.floor((low + high) / 2);
+          if (compareAt(middle) === -1) low = middle + 1; else high = middle;
+        }
+        start = low;
+      }
+      if (compareAt(length) === 1) {
+        let low = 0, high = length;
+        while (low < high) {
+          const middle = Math.ceil((low + high) / 2);
+          if (compareAt(middle) === 1) high = middle - 1; else low = middle;
+        }
+        end = low;
+      }
+      if (end > start) {
+        const part = document.createRange(); part.setStart(textNode, start); part.setEnd(textNode, end);
+        textRanges.push(part);
+      }
     }
     if (!textRanges.length) { notice("Não encontrei texto para marcar.", true); return; }
     const marks = [];
@@ -432,6 +450,12 @@ function applyHighlight() {
     const next = document.createRange(); next.setStartBefore(marks[0]); next.setEndAfter(marks[marks.length - 1]);
     selection.addRange(next); selectedRange = next.cloneRange();
   } catch { notice("Não consegui marcar esse trecho. Tente selecionar novamente.", true); }
+}
+function clearHighlights() {
+  if (!editMode) return;
+  document.querySelectorAll(".readbody .marker").forEach(mark => mark.replaceWith(...mark.childNodes));
+  selectedRange = null; window.getSelection()?.removeAllRanges();
+  notice("Marcações de cor removidas. Salve para guardar a alteração.");
 }
 function formatSelectedText(command) {
   const record = currentRep();
@@ -498,7 +522,7 @@ Object.assign(window, {
   removeMemberByEmail, moveSong, copyLink, openCommentForm, submitComment, openComments,
   resendVerificationEmail,
   markCommentRead, deleteComment, openModal, closeModal, openReader, closeReader,
-  toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor,
+  toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
   changeReaderFont, formatSelectedText, topScroll, toggleScroll
 });
 window.addEventListener("error", event => console.error("Repertório:", event.message));
