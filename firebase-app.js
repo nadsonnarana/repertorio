@@ -7,6 +7,7 @@ let busy = false;
 let editMode = false;
 let markerColor = "#fff2a8";
 let selectedRange = null;
+let readerFontSize = null;
 let scrollTimer = null;
 let scrollLastTime = 0;
 let scrollRemainder = 0;
@@ -301,7 +302,19 @@ function openReader() {
   byId("area").scrollTop = 0; byId("editToggle").hidden = !record.canEdit;
   byId("editbar").style.display = "none"; editMode = false;
   byId("full").classList.add("open"); document.body.style.overflow = "hidden";
+  syncReaderFont();
   byId("play").textContent = "▶ Iniciar rolagem";
+}
+function syncReaderFont() {
+  const paper = byId("paper");
+  if (readerFontSize === null) readerFontSize = Number.parseFloat(getComputedStyle(paper).fontSize) || 15;
+  paper.style.fontSize = readerFontSize + "px";
+  byId("fontSizeLabel").textContent = Math.round(readerFontSize) + " px";
+}
+function changeReaderFont(amount) {
+  if (readerFontSize === null) syncReaderFont();
+  readerFontSize = Math.min(32, Math.max(12, readerFontSize + amount));
+  syncReaderFont();
 }
 function plainToHtml(text) { return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? escapeHtml(line) : "<br>") + "</div>").join(""); }
 function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; }
@@ -346,6 +359,26 @@ function applyHighlight() {
     mark.appendChild(range.extractContents()); range.insertNode(mark);
     const selection = window.getSelection(); selection.removeAllRanges(); const next = document.createRange(); next.selectNodeContents(mark); selection.addRange(next); selectedRange = next.cloneRange();
   } catch { notice("Selecione o trecho dentro de uma única linha.", true); }
+}
+function formatSelectedText(command) {
+  const record = currentRep();
+  if (!editMode || !record?.canEdit || !["bold", "italic"].includes(command) || !selectedRange || selectedRange.collapsed) {
+    notice("Entre em Editar e selecione o trecho que deseja formatar.", true); return;
+  }
+  const range = selectedRange.cloneRange();
+  const node = range.startContainer;
+  const editor = (node.nodeType === 1 ? node : node.parentElement)?.closest('.readbody[contenteditable="true"]');
+  if (!editor) { notice("Selecione o texto dentro da letra ou cifra.", true); return; }
+  const selection = window.getSelection();
+  selection.removeAllRanges(); selection.addRange(range);
+  const applied = document.execCommand(command, false, null);
+  if (!applied && selection.rangeCount) {
+    const wrapper = document.createElement(command === "bold" ? "strong" : "em");
+    const selected = selection.getRangeAt(0);
+    wrapper.appendChild(selected.extractContents()); selected.insertNode(wrapper);
+    selection.removeAllRanges(); const next = document.createRange(); next.selectNodeContents(wrapper); selection.addRange(next);
+  }
+  if (selection.rangeCount) selectedRange = selection.getRangeAt(0).cloneRange();
 }
 function topScroll() { byId("area").scrollTo({ top: 0, behavior: "smooth" }); }
 function toggleScroll() {
@@ -392,7 +425,7 @@ Object.assign(window, {
   removeMemberByEmail, copyLink, openCommentForm, submitComment, openComments,
   markCommentRead, deleteComment, openModal, closeModal, openReader, closeReader,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor,
-  topScroll, toggleScroll
+  changeReaderFont, formatSelectedText, topScroll, toggleScroll
 });
 window.addEventListener("error", event => console.error("Repertório:", event.message));
 FB.watchAuth(authUser => { bootUser(authUser); });
