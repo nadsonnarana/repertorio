@@ -23,6 +23,14 @@ const currentRep = () => data.find(item => item.id === activeId);
 const normalized = value => String(value || "").trim().toLowerCase();
 const siteOwnerEmail = "nadsonp850@gmail.com";
 const isSiteOwner = () => normalized(user?.email) === siteOwnerEmail;
+document.addEventListener("click", event => {
+  const summary = event.target.closest(".palette-menu > summary");
+  if (!summary) return;
+  const openingMenu = summary.parentElement;
+  if (!openingMenu.open) document.querySelectorAll(".palette-menu[open]").forEach(menu => {
+    if (menu !== openingMenu) menu.open = false;
+  });
+});
 
 function notice(message, error = false) {
   const box = byId("appNotice");
