@@ -253,6 +253,15 @@ function renderDetail() {
   const panels = [...appRoot.querySelectorAll(".panel")];
   const observationsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Observações para os músicos"));
   const songsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Músicas neste repertório"));
+  const headingActions = appRoot.querySelector(".heading-actions");
+  if (headingActions) {
+    const pdfButton = document.createElement("button");
+    pdfButton.className = "btn";
+    pdfButton.type = "button";
+    pdfButton.textContent = "⇩ Baixar PDF";
+    pdfButton.onclick = downloadRepertoirePdf;
+    headingActions.insertBefore(pdfButton, headingActions.firstChild);
+  }
   if (observationsPanel && songsPanel) appRoot.insertBefore(observationsPanel, songsPanel);
   const songsHeading = songsPanel?.querySelector("h2");
   if (songsHeading && record.canEdit) {
@@ -393,6 +402,31 @@ async function saveObservations() {
   } catch (error) { notice(friendlyError(error), true); }
 }
 function openReader() { openReaderNow(); }
+function downloadRepertoirePdf() {
+  const record = currentRep();
+  if (!record) return;
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    notice("Permita pop-ups para gerar o PDF.", true);
+    return;
+  }
+  printWindow.opener = null;
+  const songsHtml = record.songs.map((song, index) =>
+    '<section class="song"><h2>' + (index + 1) + ". " + escapeHtml(song.name) + '</h2><p class="key">Tom: ' + escapeHtml(song.key || "—") + '</p><div class="lyrics">' + FB.sanitizeSongHtml(song.bodyHtml || plainToHtml(song.body)) + "</div></section>"
+  ).join("");
+  const observationsHtml = record.observations
+    ? '<section class="observations"><h2>Observações para os músicos</h2><p>' + escapeHtml(record.observations) + "</p></section>"
+    : "";
+  const safeTitle = escapeHtml(record.name);
+  const filename = String(record.name || "repertorio").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").trim() || "repertorio";
+  printWindow.document.open();
+  printWindow.document.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + filename + '</title><style>@page{size:A4;margin:16mm 15mm}*{box-sizing:border-box}body{color:#202e26;font:11pt/1.55 Georgia,"Times New Roman",serif;margin:0}h1{font:700 20pt/1.2 Arial,sans-serif;margin:0 0 5mm}h2{font:700 13pt/1.3 Arial,sans-serif;margin:0 0 2mm}.subtitle{font:10pt Arial,sans-serif;color:#66746a;margin:0 0 9mm}.song{margin:0 0 9mm;break-inside:avoid;page-break-inside:avoid}.key{font:9pt Arial,sans-serif;color:#66746a;margin:0 0 3mm}.lyrics{white-space:pre-wrap;overflow-wrap:anywhere}.lyrics>div{min-height:1.55em}.observations{border-top:1px solid #dce3dc;padding-top:6mm;margin-top:8mm;break-inside:avoid}.observations p{white-space:pre-wrap;margin:0}.marker{print-color-adjust:exact;-webkit-print-color-adjust:exact}.lyric-color-red{color:#b42318}.lyric-color-blue{color:#175cd3}.lyric-color-green{color:#18794e}.lyric-color-purple{color:#6941c6}.lyric-color-orange{color:#c4320a}.lyric-color-black{color:#26382e}@media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body><h1>' + safeTitle + '</h1><p class="subtitle">' + record.songs.length + ' músicas</p>' + (songsHtml || '<p>Este repertório ainda não tem músicas.</p>') + observationsHtml + '</body></html>');
+  printWindow.document.close();
+  setTimeout(() => {
+    printWindow.focus();
+    printWindow.print();
+  }, 300);
+}
 function openReaderNow() {
   const record = currentRep(); if (!record) return;
   stopScroll();
@@ -579,7 +613,7 @@ Object.assign(window, {
   editSong, updateSong, confirmDeleteRep, confirmDeleteSong, shareRep, invite,
   removeMemberByEmail, moveSong, copyLink, openCommentForm, submitComment, openComments,
   resendVerificationEmail,
-  markCommentRead, deleteComment, openModal, closeModal, openReader, closeReader,
+  markCommentRead, deleteComment, openModal, closeModal, openReader, downloadRepertoirePdf, closeReader,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
   changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll, saveObservations
 });
