@@ -186,7 +186,7 @@ async function refreshData() {
 }
 function renderHome() {
   activeId = null;
-  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions"><button class="btn" onclick="refreshData()">↻ Atualizar</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button></div></div><div class="cards" id="cards"></div>';
+  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions"><button class="btn" onclick="refreshData()">↻ Atualizar</button>' + (isSiteOwner() ? '<button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
   const cards = byId("cards");
   if (!data.length) { cards.innerHTML = '<div class="empty">Você ainda não tem repertórios. Crie o primeiro para começar.</div>'; return; }
   data.forEach(record => {
@@ -234,10 +234,11 @@ async function refreshCurrent() {
   catch (error) { notice(friendlyError(error), true); }
 }
 function newRep() {
-  if (sharedRouteId) return;
+  if (sharedRouteId || !isSiteOwner()) return;
   openModal('<h2>Novo repertório</h2><p>Crie um repertório sincronizado com sua conta.</p><input id="repname" placeholder="Nome do repertório" maxlength="100"><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="createRep()">Criar repertório</button></div>');
 }
 async function createRep() {
+  if (!isSiteOwner()) { notice("Somente o administrador do site pode criar repertórios.", true); return; }
   const name = byId("repname").value.trim(); if (!name) return;
   try { const id = await FB.createRepertoire(name); await reloadData(); closeModal(); openRep(id); }
   catch (error) { notice(friendlyError(error), true); }

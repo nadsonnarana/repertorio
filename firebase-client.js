@@ -128,6 +128,9 @@ export async function listRepertoires() {
 }
 export async function createRepertoire(name) {
   const user = requireSignedIn();
+  if (normalizeEmail(user.email) !== siteOwnerEmail) {
+    throw Object.assign(new Error("Somente o administrador do site pode criar repertórios."), { code: "permission-denied" });
+  }
   const ref = await addDoc(collection(db, "repertoires"), {
     name: String(name).trim(), ownerUid: user.uid, publicRead: true,
     createdAt: serverTimestamp()
