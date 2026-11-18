@@ -119,10 +119,21 @@ export function watchAuth(callback) { return onAuthStateChanged(auth, callback);
 export async function listRepertoires() {
   const user = requireSignedIn();
   const source = collection(db, "repertoires");
-  const [owned, publicDocs] = await Promise.all([
-    getDocs(query(source, where("ownerUid", "==", user.uid))),
-    getDocs(query(source, where("publicRead", "==", true)))
-  ]);
+  const owned = await getDocs(query(source, where("ownerUid", "==", user.uid)));
+  let publicDocs;
+  try {
+    publicDocs = await getDocs(query(source, where("publicRead", "==", true)));
+  } catch (error) {
+    // A public query is rejected if even one matching legacy document still
+    // contains private email fields. Returning owned docs lets their owners
+    // reach the cleanup path in reloadData() instead of failing the whole load.
+    if (error?.code !== "permission-denied") throw error;
+    console.warn("A consulta pública foi bloqueada por documentos legados; carregando os repertórios próprios para permitir a migração.");
+    if (owned.empty) {
+      throw Object.assign(new Error("A visualização compartilhada está temporariamente bloqueada enquanto o dono migra dados antigos. Peça ao administrador para entrar no site e atualizar os repertórios."), { code: "app/legacy-public-repertoires" });
+    }
+    publicDocs = { docs: [] };
+  }
   const byId = new Map();
   [...owned.docs, ...publicDocs.docs].forEach(item => byId.set(item.id, { id: item.id, ...item.data() }));
   return [...byId.values()];
@@ -200,11 +211,12 @@ export async function setRepertoireName(repertoireId, name) {
 export async function deleteRepertoire(repertoireId) {
   requireSignedIn();
   // Firestore não remove subcoleções junto com o documento pai.
-  // As músicas e comentários devem ser removidos antes do documento.
-  for (const sub of ["songs", "comments"]) {
+  // Remova todas as subcoleções antes do documento pai para não deixar dados órfãos.
+  for (const sub of ["songs", "comments", "editorAccess"]) {
     const snap = await getDocs(collection(db, "repertoires", repertoireId, sub));
     await Promise.all(snap.docs.map(item => deleteDoc(item.ref)));
   }
+  await deleteDoc(doc(db, "repertoires", repertoireId, "settings", "notes"));
   return deleteDoc(doc(db, "repertoires", repertoireId));
 }
 export async function grantEditorAccess(repertoireId, email) {
