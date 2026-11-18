@@ -12,6 +12,9 @@ let scrollTimer = null;
 let scrollLastTime = 0;
 let scrollRemainder = 0;
 let screenWakeLock = null;
+let stopLiveSync = null;
+let liveSyncTimer = null;
+let liveSyncPending = false;
 const sharedRouteId = new URLSearchParams(location.search).get("repertory");
 const appRoot = document.getElementById("app");
 const byId = id => document.getElementById(id);
@@ -46,6 +49,8 @@ function avatars(members) {
   return '<div class="faces">' + members.slice(0, 4).map(member => '<span class="face" title="' + escapeHtml(member.name) + '">' + escapeHtml(initials(member.name)) + '</span>').join("") + (members.length > 4 ? '<span class="face more">+' + (members.length - 4) + '</span>' : '') + '</div>';
 }
 function showLogin(message = "") {
+  if (stopLiveSync) { stopLiveSync(); stopLiveSync = null; }
+  clearTimeout(liveSyncTimer); liveSyncPending = false;
   activeId = null;
   data = [];
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
@@ -169,6 +174,7 @@ async function bootUser(authUser) {
   appRoot.innerHTML = '<div class="loading">Carregando seus repertórios…</div>';
   try {
     await reloadData();
+    startLiveSync();
     if (sharedRouteId) {
       const target = data.find(item => item.id === sharedRouteId);
       if (target) { openRep(target.id); return; }
@@ -180,13 +186,31 @@ async function bootUser(authUser) {
     appRoot.innerHTML = '<div class="empty">' + escapeHtml(friendlyError(error)) + '<br><button class="btn" style="margin-top:12px" onclick="refreshData()">Tentar novamente</button></div>';
   }
 }
+function startLiveSync() {
+  if (stopLiveSync) stopLiveSync();
+  stopLiveSync = FB.watchRepertoireChanges(error => {
+    if (error) { console.warn("Atualização em tempo real:", error); return; }
+    liveSyncPending = true;
+    clearTimeout(liveSyncTimer);
+    liveSyncTimer = setTimeout(flushLiveSync, 350);
+  });
+}
+async function flushLiveSync() {
+  if (!liveSyncPending || !user) return;
+  if (editMode || byId("full")?.classList.contains("open") || byId("modalback")?.classList.contains("open") || byId("observationsText") === document.activeElement) return;
+  liveSyncPending = false;
+  try {
+    await reloadData();
+    if (activeId) renderDetail(); else renderHome();
+  } catch (error) { console.warn("Não foi possível sincronizar em tempo real:", error); }
+}
 async function refreshData() {
   try { await reloadData(); renderHome(); }
   catch (error) { notice(friendlyError(error), true); }
 }
 function renderHome() {
   activeId = null;
-  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions"><button class="btn" onclick="refreshData()">↻ Atualizar</button>' + (isSiteOwner() ? '<button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
+  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
   const cards = byId("cards");
   if (!data.length) { cards.innerHTML = '<div class="empty">Você ainda não tem repertórios. Crie o primeiro para começar.</div>'; return; }
   data.forEach(record => {
@@ -216,10 +240,20 @@ function renderDetail() {
   const record = currentRep();
   if (!record) { renderHome(); return; }
   const owner = record.isOwner;
-  const detailActions = (owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button><button class="btn" onclick="shareRep()">✎ Designar editores</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>')
-    + (record.canEdit ? '<button class="btn primary" onclick="addSong()">＋ Adicionar música</button>' : '')
-    + (owner ? '<button class="btn danger" onclick="confirmDeleteRep(\'' + record.id + '\')">Apagar</button>' : '');
-  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section><section class="panel observations-panel"><h2>Observações para os músicos</h2><p class="muted">Estas observações ficam visíveis para todos neste repertório.</p><textarea id="observationsText" class="observations-input" maxlength="5000" ' + (owner ? '' : 'readonly') + ' placeholder="' + (owner ? 'Escreva avisos para os músicos...' : 'Nenhuma observação cadastrada.') + '">' + escapeHtml(record.observations || '') + '</textarea><div class="observations-footer"><span class="muted">Até 5.000 caracteres</span>' + (owner ? '<button class="btn primary" onclick="saveObservations()">Salvar observações</button>' : '') + '</div></section><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section>';
+  const detailActions = owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>';
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section><section class="panel observations-panel"><h2>Observações para os músicos</h2><p class="muted">Estas observações ficam visíveis para todos neste repertório.</p><textarea id="observationsText" class="observations-input" maxlength="5000" ' + (owner ? '' : 'readonly') + ' placeholder="' + (owner ? 'Escreva avisos para os músicos...' : 'Nenhuma observação cadastrada.') + '">' + escapeHtml(record.observations || '') + '</textarea><div class="observations-footer"><span class="muted">Até 5.000 caracteres</span>' + (owner ? '<button class="btn primary" onclick="saveObservations()">Salvar observações</button>' : '') + '</div></section><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section>';
+  const panels = [...appRoot.querySelectorAll(".panel")];
+  const observationsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Observações para os músicos"));
+  const songsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Músicas neste repertório"));
+  if (observationsPanel && songsPanel) appRoot.insertBefore(observationsPanel, songsPanel);
+  const songsHeading = songsPanel?.querySelector("h2");
+  if (songsHeading && record.canEdit) {
+    const headingRow = document.createElement("div"); headingRow.className = "panel-title-row";
+    songsHeading.parentNode.insertBefore(headingRow, songsHeading);
+    headingRow.append(songsHeading);
+    const addButton = document.createElement("button"); addButton.className = "btn primary"; addButton.textContent = "＋ Adicionar música"; addButton.onclick = addSong;
+    headingRow.append(addButton);
+  }
   const list = byId("songlist");
   if (!record.songs.length) list.innerHTML = '<div class="empty">Este repertório ainda não tem músicas.</div>';
   record.songs.forEach((song, index) => {
@@ -341,7 +375,7 @@ async function deleteComment(index) {
   catch (error) { notice(friendlyError(error), true); }
 }
 function openModal(html) { byId("modal").removeAttribute("role"); byId("modal").removeAttribute("aria-modal"); byId("modal").innerHTML = html; byId("modalback").classList.add("open"); }
-function closeModal() { if (window.siteConfirmPending?.()) { window.resolveSiteConfirm(false); return; } byId("modalback").classList.remove("open"); }
+function closeModal() { if (window.siteConfirmPending?.()) { window.resolveSiteConfirm(false); return; } byId("modalback").classList.remove("open"); if (liveSyncPending) setTimeout(flushLiveSync, 50); }
 async function saveObservations() {
   const record = currentRep(), field = byId("observationsText"); if (!record?.isOwner || !field) return;
   const text = field.value.slice(0, 5000);
@@ -382,7 +416,7 @@ function changeReaderFont(amount) {
   syncReaderFont();
 }
 function plainToHtml(text) { return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? escapeHtml(line) : "<br>") + "</div>").join(""); }
-function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; }
+function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; if (liveSyncPending && !editMode) setTimeout(flushLiveSync, 50); }
 function toggleEdit() {
   const record = currentRep(); if (!record?.canEdit) return;
   if (editMode) { saveReaderEdits(); return; }

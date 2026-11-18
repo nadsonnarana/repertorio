@@ -23,7 +23,8 @@ import {
   orderBy,
   serverTimestamp,
   deleteField,
-  writeBatch
+  writeBatch,
+  onSnapshot
 } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
 
@@ -125,6 +126,51 @@ export async function listRepertoires() {
   const byId = new Map();
   [...owned.docs, ...publicDocs.docs].forEach(item => byId.set(item.id, { id: item.id, ...item.data() }));
   return [...byId.values()];
+}
+export function watchRepertoireChanges(callback) {
+  const user = requireSignedIn();
+  let ownedDocs = [], publicDocs = [], stopped = false;
+  const parentStops = [];
+  const childStops = new Map();
+  const ownerMode = normalizeEmail(user.email) === siteOwnerEmail;
+  const refreshSubscriptions = () => {
+    if (stopped) return;
+    const parents = new Map();
+    [...ownedDocs, ...publicDocs].forEach(item => parents.set(item.id, { id: item.id, ...item.data() }));
+    const desired = new Set();
+    const listen = (key, ref) => {
+      desired.add(key);
+      if (!childStops.has(key)) childStops.set(key, onSnapshot(ref, () => callback(), error => callback(error)));
+    };
+    parents.forEach(record => {
+      const base = collection(db, "repertoires", record.id, "songs");
+      listen(record.id + ":songs", query(base, orderBy("order", "asc")));
+      listen(record.id + ":notes", doc(db, "repertoires", record.id, "settings", "notes"));
+      if (ownerMode || record.ownerUid === user.uid) {
+        listen(record.id + ":comments", query(collection(db, "repertoires", record.id, "comments"), orderBy("createdAt", "desc")));
+        listen(record.id + ":editors", collection(db, "repertoires", record.id, "editorAccess"));
+      } else if (user.email) {
+        listen(record.id + ":my-editor", doc(db, "repertoires", record.id, "editorAccess", normalizeEmail(user.email)));
+      }
+    });
+    childStops.forEach((unsubscribe, key) => {
+      if (!desired.has(key)) { unsubscribe(); childStops.delete(key); }
+    });
+  };
+  const ownedQuery = query(collection(db, "repertoires"), where("ownerUid", "==", user.uid));
+  const publicQuery = query(collection(db, "repertoires"), where("publicRead", "==", true));
+  parentStops.push(onSnapshot(ownedQuery, snapshot => {
+    ownedDocs = snapshot.docs; refreshSubscriptions(); callback();
+  }, error => callback(error)));
+  parentStops.push(onSnapshot(publicQuery, snapshot => {
+    publicDocs = snapshot.docs; refreshSubscriptions(); callback();
+  }, error => callback(error)));
+  return () => {
+    stopped = true;
+    parentStops.forEach(unsubscribe => unsubscribe());
+    childStops.forEach(unsubscribe => unsubscribe());
+    childStops.clear();
+  };
 }
 export async function createRepertoire(name) {
   const user = requireSignedIn();
