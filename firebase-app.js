@@ -219,7 +219,7 @@ function renderDetail() {
   const detailActions = (owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button><button class="btn" onclick="shareRep()">✎ Designar editores</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>')
     + (record.canEdit ? '<button class="btn primary" onclick="addSong()">＋ Adicionar música</button>' : '')
     + (owner ? '<button class="btn danger" onclick="confirmDeleteRep(\'' + record.id + '\')">Apagar</button>' : '');
-  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn" onclick="openObservations()">▤ Observações</button><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section><section class="panel"><h2>Ideias de acordes de ligação</h2><div class="muted">Escolha os tons de saída e chegada para gerar caminhos harmônicos.</div><div class="toolrow"><label class="field">Tom que termina<select id="from"></select></label><span style="padding-bottom:8px;color:#9aa49c">→</span><label class="field">Tom que começa<select id="to"></select></label><button class="btn primary" onclick="generate()">Gerar ideias</button></div><div class="result" id="result"></div></section><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section>';
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span><button class="btn" onclick="refreshCurrent()">↻ Atualizar</button>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section><section class="panel observations-panel"><h2>Observações para os músicos</h2><p class="muted">Estas observações ficam visíveis para todos neste repertório.</p><textarea id="observationsText" class="observations-input" maxlength="5000" ' + (owner ? '' : 'readonly') + ' placeholder="' + (owner ? 'Escreva avisos para os músicos...' : 'Nenhuma observação cadastrada.') + '">' + escapeHtml(record.observations || '') + '</textarea><div class="observations-footer"><span class="muted">Até 5.000 caracteres</span>' + (owner ? '<button class="btn primary" onclick="saveObservations()">Salvar observações</button>' : '') + '</div></section><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section>';
   const list = byId("songlist");
   if (!record.songs.length) list.innerHTML = '<div class="empty">Este repertório ainda não tem músicas.</div>';
   record.songs.forEach((song, index) => {
@@ -227,7 +227,6 @@ function renderDetail() {
     row.innerHTML = '<span class="songnum">' + String(index + 1).padStart(2, "0") + '</span><span class="disc">♫</span><div><strong>' + escapeHtml(song.name) + '</strong><small>Tom: ' + escapeHtml(song.key) + '</small></div><div class="right">' + (owner ? '<button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para cima" title="Mover para cima" ' + (index === 0 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',-1)">↑</button><button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para baixo" title="Mover para baixo" ' + (index === record.songs.length - 1 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',1)">↓</button>' : '') + '<span class="tag">' + escapeHtml(song.key) + '</span>' + (record.canEdit ? '<button class="btn" onclick="editSong(' + index + ')">Editar</button>' : '') + (owner ? '<button class="btn danger" onclick="confirmDeleteSong(' + index + ')">Apagar</button>' : '') + '</div>';
     list.appendChild(row);
   });
-  initGenerator(record);
 }
 async function refreshCurrent() {
   try { await reloadData(); renderDetail(); }
@@ -343,37 +342,15 @@ async function deleteComment(index) {
 }
 function openModal(html) { byId("modal").removeAttribute("role"); byId("modal").removeAttribute("aria-modal"); byId("modal").innerHTML = html; byId("modalback").classList.add("open"); }
 function closeModal() { if (window.siteConfirmPending?.()) { window.resolveSiteConfirm(false); return; } byId("modalback").classList.remove("open"); }
-function openObservations() {
-  const record = currentRep(); if (!record) return;
-  const note = String(record.observations || "");
-  const display = note.trim()
-    ? '<div class="observations-text">' + escapeHtml(note) + '</div>'
-    : '<div class="empty observations-empty">Nenhuma observação foi adicionada ainda.</div>';
-  const editor = record.isOwner
-    ? '<label class="field observations-field">Observações para os músicos<textarea id="observationsText" maxlength="5000" placeholder="Ex.: começar em volume baixo; atenção à mudança de tom depois da segunda música.">' + escapeHtml(note) + '</textarea><span class="muted">Até 5.000 caracteres. Os músicos verão este texto antes da rolagem.</span></label>'
-    : '';
-  openModal('<h2>Observações · ' + escapeHtml(record.name) + '</h2><p>Leia os avisos da banda antes de abrir a rolagem do repertório.</p>' + (record.isOwner ? editor : display) + '<div class="modalfoot observations-actions"><button class="btn" onclick="closeModal()">Fechar</button>' + (record.isOwner ? '<button class="btn" onclick="saveObservations()">Salvar observações</button>' : '') + '<button class="btn primary" onclick="startReader()">Abrir rolagem</button></div>');
-}
 async function saveObservations() {
   const record = currentRep(), field = byId("observationsText"); if (!record?.isOwner || !field) return;
   const text = field.value.slice(0, 5000);
   try {
     await FB.saveRepertoireNotes(record.id, text); record.observations = text;
-    openObservations(); notice("Observações salvas para os músicos.");
+    notice("Observações salvas para todos neste repertório.");
   } catch (error) { notice(friendlyError(error), true); }
 }
-async function startReader() {
-  const record = currentRep(); if (!record) return;
-  const field = byId("observationsText");
-  if (record.isOwner && field && field.value !== String(record.observations || "")) {
-    try {
-      record.observations = field.value.slice(0, 5000);
-      await FB.saveRepertoireNotes(record.id, record.observations);
-    } catch (error) { notice(friendlyError(error), true); return; }
-  }
-  closeModal(); openReaderNow();
-}
-function openReader() { openObservations(); }
+function openReader() { openReaderNow(); }
 function openReaderNow() {
   const record = currentRep(); if (!record) return;
   stopScroll();
@@ -428,7 +405,7 @@ async function saveReaderEdits() {
 }
 function chooseColor(color, button) {
   markerColor = color; document.querySelectorAll(".swatch").forEach(item => item.classList.remove("selected"));
-  if (button) button.classList.add("selected");
+  if (button) { button.classList.add("selected"); button.closest("details")?.removeAttribute("open"); }
 }
 function applyHighlightColor(color, button) { chooseColor(color, button); applyHighlight(); }
 function selectedTextRanges(editor, range) {
@@ -486,7 +463,7 @@ const textColorClasses = new Set(["lyric-color-red", "lyric-color-blue", "lyric-
 function applyTextColor(colorClass, button) {
   if (!textColorClasses.has(colorClass)) return;
   document.querySelectorAll(".text-color-swatch").forEach(item => item.classList.remove("selected"));
-  if (button) button.classList.add("selected");
+  if (button) { button.classList.add("selected"); button.closest("details")?.removeAttribute("open"); }
   wrapSelectedText(colorClass);
 }
 document.addEventListener("selectionchange", () => {
@@ -554,15 +531,6 @@ function stopScroll() {
   if (screenWakeLock) { screenWakeLock.release().catch(() => {}); screenWakeLock = null; }
   if (byId("play")) byId("play").textContent = "▶ Iniciar rolagem";
 }
-function initGenerator(record) {
-  if (!window.generate || !byId("from")) return;
-  const keys = ["C","C#","Db","D","Eb","E","F","F#","G","Ab","A","Bb","B","Am","Bbm","Bm","Cm","C#m","Dm","Ebm","Em","Fm","F#m","Gm","G#m"];
-  ["from", "to"].forEach(id => { const select = byId(id); keys.forEach(key => { const option = document.createElement("option"); option.value = key; option.textContent = key; select.appendChild(option); }); });
-  byId("from").value = keys.includes(record.songs.at(-1)?.key) ? record.songs.at(-1).key : "G";
-  byId("to").value = keys.includes(record.songs[0]?.key) ? record.songs[0].key : "D";
-  window.generate();
-}
-
 Object.assign(window, {
   render: renderHome, renderDetail, openRep, goHome, refreshData, refreshCurrent,
   logoutUser, registerAccount, resetAccountPassword, newRep, createRep, addSong, saveSong,
@@ -571,8 +539,7 @@ Object.assign(window, {
   resendVerificationEmail,
   markCommentRead, deleteComment, openModal, closeModal, openReader, closeReader,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
-  changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll,
-  openObservations, saveObservations, startReader
+  changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll, saveObservations
 });
 window.addEventListener("error", event => console.error("Repertório:", event.message));
 FB.watchAuth(authUser => {
