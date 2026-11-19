@@ -298,8 +298,8 @@ function addSong() {
   openModal('<h2>Adicionar música</h2><p>Letra e cifra vão ficar salvas no Firestore.</p><input id="songname" placeholder="Nome da música" maxlength="160"><input id="songkey" placeholder="Tom (ex.: G, Am, Bb)" maxlength="12"><textarea id="songbody" placeholder="[Intro] G D Em C\n\n[Verso]\n[ G ] Escreva a letra com os acordes entre colchetes..."></textarea><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="saveSong()">Adicionar</button></div>');
 }
 async function saveSong() {
-  const record = currentRep(), name = byId("songname").value.trim(); if (!name) return;
-  try { await FB.addSong(record.id, { title: name, key: byId("songkey").value.trim() || "—", body: byId("songbody").value.trim() }); await refreshDataForCurrent(); closeModal(); renderDetail(); }
+  const record = currentRep(), name = byId("songname").value.trim(), body = byId("songbody").value.trim(); if (!name) return;
+  try { await FB.addSong(record.id, { title: name, key: byId("songkey").value.trim() || "—", body, bodyHtml: plainToHtml(body) }); await refreshDataForCurrent(); closeModal(); renderDetail(); }
   catch (error) { notice(friendlyError(error), true); }
 }
 function editSong(index) {
@@ -308,8 +308,8 @@ function editSong(index) {
   openModal('<h2>Editar música</h2><p>O dono e os editores designados podem editar músicas e cifras.</p><input id="songname" value="' + escapeHtml(song.name) + '" maxlength="160"><input id="songkey" value="' + escapeHtml(song.key) + '" maxlength="12"><textarea id="songbody">' + escapeHtml(song.body) + '</textarea><div class="modalfoot"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="updateSong(' + index + ')">Salvar</button></div>');
 }
 async function updateSong(index) {
-  const record = currentRep(), song = record.songs[index];
-  try { await FB.updateSong(record.id, song.id, { title: byId("songname").value.trim() || song.name, key: byId("songkey").value.trim() || "—", body: byId("songbody").value, bodyHtml: song.bodyHtml || "", order: index }); await refreshDataForCurrent(); closeModal(); renderDetail(); }
+  const record = currentRep(), song = record.songs[index], body = byId("songbody").value;
+  try { await FB.updateSong(record.id, song.id, { title: byId("songname").value.trim() || song.name, key: byId("songkey").value.trim() || "—", body, bodyHtml: plainToHtml(body), order: index }); await refreshDataForCurrent(); closeModal(); renderDetail(); }
   catch (error) { notice(friendlyError(error), true); }
 }
 async function refreshDataForCurrent() {
@@ -457,7 +457,26 @@ function changeReaderFont(amount) {
   readerFontSize = Math.min(32, Math.max(12, readerFontSize + amount));
   syncReaderFont();
 }
-function plainToHtml(text) { return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? escapeHtml(line) : "<br>") + "</div>").join(""); }
+function plainToHtml(text) {
+  const linkify = value => {
+    const urlPattern = /https?:\/\/[^\s<>"']+/gi;
+    let html = "", lastIndex = 0, match;
+    while ((match = urlPattern.exec(value))) {
+      let url = match[0];
+      let trailing = "";
+      while (/[.,!?;:)]$/.test(url)) { trailing = url.slice(-1) + trailing; url = url.slice(0, -1); }
+      html += escapeHtml(value.slice(lastIndex, match.index));
+      if (url) {
+        const href = escapeHtml(url);
+        html += '<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(url) + "</a>";
+      }
+      html += escapeHtml(trailing);
+      lastIndex = match.index + match[0].length;
+    }
+    return html + escapeHtml(value.slice(lastIndex));
+  };
+  return String(text || "").split(/\r?\n/).map(line => "<div>" + (line ? linkify(line) : "<br>") + "</div>").join("");
+}
 function closeReader() { stopScroll(); byId("full").classList.remove("open"); document.body.style.overflow = ""; if (liveSyncPending && !editMode) setTimeout(flushLiveSync, 50); }
 function toggleEdit() {
   const record = currentRep(); if (!record?.canEdit) return;

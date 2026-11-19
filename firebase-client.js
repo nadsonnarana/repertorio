@@ -51,17 +51,48 @@ function escapeText(value) {
 export function sanitizeSongHtml(value) {
   const dirty = String(value || "");
   if (!globalThis.DOMPurify) {
-    return dirty.split(/\r?\n/).map(line => "<div>" + (line ? escapeText(line) : "<br>") + "</div>").join("");
+    const text = new DOMParser().parseFromString(dirty, "text/html").body.textContent || "";
+    return text.split(/\r?\n/).map(line => {
+      if (!line) return "<div><br></div>";
+      const pattern = /https?:\/\/[^\s<>"']+/gi;
+      let result = "", lastIndex = 0, match;
+      while ((match = pattern.exec(line))) {
+        let url = match[0], trailing = "";
+        while (/[.,!?;:)]$/.test(url)) { trailing = url.slice(-1) + trailing; url = url.slice(0, -1); }
+        result += escapeText(line.slice(lastIndex, match.index));
+        try {
+          const parsed = new URL(url);
+          if (["http:", "https:"].includes(parsed.protocol)) {
+            result += '<a href="' + escapeText(parsed.href) + '" target="_blank" rel="noopener noreferrer">' + escapeText(url) + "</a>";
+          } else result += escapeText(url);
+        } catch { result += escapeText(url); }
+        result += escapeText(trailing);
+        lastIndex = match.index + match[0].length;
+      }
+      return "<div>" + result + escapeText(line.slice(lastIndex)) + "</div>";
+    }).join("");
   }
   const safe = globalThis.DOMPurify.sanitize(dirty, {
-    ALLOWED_TAGS: ["div", "br", "span", "b", "strong", "i", "em", "u"],
-    ALLOWED_ATTR: ["class", "style"],
+    ALLOWED_TAGS: ["div", "br", "span", "b", "strong", "i", "em", "u", "a"],
+    ALLOWED_ATTR: ["class", "style", "href", "target", "rel"],
     ALLOW_DATA_ATTR: false,
     FORBID_TAGS: ["style", "script", "iframe", "object", "embed", "svg", "math"]
   });
   const template = document.createElement("template");
   template.innerHTML = safe;
   template.content.querySelectorAll("*").forEach(element => {
+    if (element.tagName === "A") {
+      let url;
+      try { url = new URL(element.getAttribute("href") || ""); } catch { url = null; }
+      if (!url || !["http:", "https:"].includes(url.protocol)) {
+        element.replaceWith(...element.childNodes);
+        return;
+      }
+      element.setAttribute("href", url.href);
+      element.setAttribute("target", "_blank");
+      element.setAttribute("rel", "noopener noreferrer");
+      return;
+    }
     const isMarker = element.classList.contains("marker");
     const textColorClass = [...element.classList].find(name => /^lyric-color-(red|blue|green|purple|orange|black)$/.test(name));
     const background = element.style.backgroundColor;
