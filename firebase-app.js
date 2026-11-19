@@ -84,7 +84,7 @@ function showLogin(message = "") {
   data = [];
   viewingAccessLogs = false;
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
-  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><div class="password-field"><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><button id="togglePassword" class="password-toggle" type="button" aria-label="Mostrar senha" title="Mostrar senha">◉</button></div><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button></div><a id="resetPasswordLink" class="reset-password-link" href="#" onclick="resetAccountPassword(event)" hidden>Esqueci minha senha</a></form></section></div>';
+  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><div class="password-field"><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><button id="togglePassword" class="password-toggle" type="button" aria-label="Mostrar senha"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button></div><a id="resetPasswordLink" class="reset-password-link" href="#" onclick="resetAccountPassword(event)" hidden>Esqueci minha senha</a></form></section></div>';
   const emailField = byId("authEmail"), passwordField = byId("authPassword");
   const updateResetLink = () => {
     const email = normalized(emailField.value);
@@ -96,9 +96,10 @@ function showLogin(message = "") {
   byId("togglePassword").addEventListener("click", () => {
     const shouldShow = passwordField.type === "password";
     passwordField.type = shouldShow ? "text" : "password";
-    byId("togglePassword").textContent = shouldShow ? "◎" : "◉";
     byId("togglePassword").setAttribute("aria-label", shouldShow ? "Ocultar senha" : "Mostrar senha");
-    byId("togglePassword").title = shouldShow ? "Ocultar senha" : "Mostrar senha";
+    byId("togglePassword").innerHTML = shouldShow
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18"></path><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 5.2A11 11 0 0 1 12 5c6.4 0 10 7 10 7a16 16 0 0 1-3.2 4.1"></path><path d="M6.2 6.2C3.5 8 2 12 2 12s3.6 7 10 7a10 10 0 0 0 4-.8"></path></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
   });
   byId("loginForm").addEventListener("submit", event => { event.preventDefault(); loginAccount(); });
 }
