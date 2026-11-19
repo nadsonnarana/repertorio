@@ -21,6 +21,7 @@ import {
   query,
   where,
   orderBy,
+  limit,
   serverTimestamp,
   deleteField,
   writeBatch,
@@ -213,6 +214,47 @@ export function watchRepertoireChanges(callback) {
     childStops.forEach(unsubscribe => unsubscribe());
     childStops.clear();
   };
+}
+export function watchRepertoirePresence(repertoireId, callback) {
+  const user = requireSignedIn();
+  const presenceCollection = collection(db, "repertoires", repertoireId, "presence");
+  const presenceRef = doc(presenceCollection, user.uid);
+  const emailName = user.email ? user.email.split("@")[0] : "";
+  const name = String(user.displayName || emailName || "Integrante").slice(0, 80);
+  let stopped = false;
+  const heartbeat = () => setDoc(presenceRef, {
+    uid: user.uid, name, updatedAt: serverTimestamp()
+  }).catch(error => { if (!stopped) callback([], error); });
+  heartbeat();
+  const timer = setInterval(heartbeat, 25000);
+  const unsubscribe = onSnapshot(presenceCollection, snapshot => {
+    const cutoff = Date.now() - 65000;
+    const users = snapshot.docs.map(item => ({ uid: item.id, ...item.data() }))
+      .filter(item => item.updatedAt?.toMillis && item.updatedAt.toMillis() >= cutoff)
+      .map(item => ({ uid: item.uid, name: item.name }));
+    callback(users);
+  }, error => callback([], error));
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+    unsubscribe();
+  };
+}
+export async function recordRepertoireAccess(repertoireId, repertoireName) {
+  const user = requireSignedIn();
+  return addDoc(collection(db, "accessLogs"), {
+    uid: user.uid,
+    email: normalizeEmail(user.email),
+    repertoireId: String(repertoireId),
+    repertoireName: String(repertoireName || "").slice(0, 120),
+    accessedAt: serverTimestamp()
+  });
+}
+export async function listAccessLogs() {
+  requireSignedIn();
+  const q = query(collection(db, "accessLogs"), orderBy("accessedAt", "desc"), limit(100));
+  const snap = await getDocs(q);
+  return snap.docs.map(item => ({ id: item.id, ...item.data() }));
 }
 export async function createRepertoire(name) {
   const user = requireSignedIn();

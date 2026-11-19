@@ -15,10 +15,30 @@ let screenWakeLock = null;
 let stopLiveSync = null;
 let liveSyncTimer = null;
 let liveSyncPending = false;
+let activePresenceStop = null;
+let activePresenceId = null;
+let activePresenceUsers = [];
+let viewingAccessLogs = false;
+let accessLogData = null;
+const loginAttemptStoragePrefix = "repertorio-login-failures:";
 const sharedRouteId = new URLSearchParams(location.search).get("repertory");
 const appRoot = document.getElementById("app");
 const byId = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+function linkifyLeadingUrl(value) {
+  const text = String(value ?? "");
+  const match = text.match(/^\s*(https?:\/\/[^\s<>"']+)/i);
+  if (!match) return escapeHtml(text);
+  let url = match[1], trailing = "";
+  while (/[.,!?;:)]$/.test(url)) { trailing = url.slice(-1) + trailing; url = url.slice(0, -1); }
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return escapeHtml(text);
+    const prefix = text.slice(0, match.index + match[0].indexOf(match[1]));
+    const suffix = text.slice(prefix.length + match[1].length);
+    return escapeHtml(prefix) + '<a href="' + escapeHtml(parsed.href) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(url) + "</a>" + escapeHtml(trailing + suffix);
+  } catch { return escapeHtml(text); }
+}
 const currentRep = () => data.find(item => item.id === activeId);
 const normalized = value => String(value || "").trim().toLowerCase();
 const siteOwnerEmail = "nadsonp850@gmail.com";
@@ -57,19 +77,47 @@ function avatars(members) {
   return '<div class="faces">' + members.slice(0, 4).map(member => '<span class="face" title="' + escapeHtml(member.name) + '">' + escapeHtml(initials(member.name)) + '</span>').join("") + (members.length > 4 ? '<span class="face more">+' + (members.length - 4) + '</span>' : '') + '</div>';
 }
 function showLogin(message = "") {
+  stopRepertoirePresence();
   if (stopLiveSync) { stopLiveSync(); stopLiveSync = null; }
   clearTimeout(liveSyncTimer); liveSyncPending = false;
   activeId = null;
   data = [];
+  viewingAccessLogs = false;
   byId("barInfo").textContent = "Entre para sincronizar seu repertório";
-  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button><button class="btn" type="button" onclick="resendVerificationEmail()" data-busy-button="true">Reenviar confirmação</button><button class="btn" type="button" onclick="resetAccountPassword()">Esqueci a senha</button></div></form></section></div>';
+  appRoot.innerHTML = '<div class="authwrap"><section class="panel"><div class="eyebrow">REPERTÓRIO · ACESSO DA BANDA</div><h1>Entrar na sua conta</h1><p class="muted">Use um endereço @gmail.com, @hotmail.com ou @icloud.com e confirme-o pelo link enviado ao seu e-mail. As contas confirmadas podem visualizar; o dono libera a edição pelo e-mail.</p><div id="appNotice" class="authnotice"' + (message ? '' : ' hidden') + '>' + escapeHtml(message) + '</div><form id="loginForm"><input id="authEmail" type="email" autocomplete="email" placeholder="Seu e-mail" required><div class="password-field"><input id="authPassword" type="password" autocomplete="current-password" placeholder="Senha" required><button id="togglePassword" class="password-toggle" type="button" aria-label="Mostrar senha" title="Mostrar senha">◉</button></div><div class="authactions"><button class="btn primary" type="submit" data-busy-button="true">Entrar</button><button class="btn" type="button" onclick="registerAccount()" data-busy-button="true">Criar conta</button></div><a id="resetPasswordLink" class="reset-password-link" href="#" onclick="resetAccountPassword(event)" hidden>Esqueci minha senha</a></form></section></div>';
+  const emailField = byId("authEmail"), passwordField = byId("authPassword");
+  const updateResetLink = () => {
+    const email = normalized(emailField.value);
+    const attempts = email ? Number(localStorage.getItem(loginAttemptStoragePrefix + email) || 0) : 0;
+    byId("resetPasswordLink").hidden = attempts < 3;
+  };
+  emailField.addEventListener("input", updateResetLink);
+  updateResetLink();
+  byId("togglePassword").addEventListener("click", () => {
+    const shouldShow = passwordField.type === "password";
+    passwordField.type = shouldShow ? "text" : "password";
+    byId("togglePassword").textContent = shouldShow ? "◎" : "◉";
+    byId("togglePassword").setAttribute("aria-label", shouldShow ? "Ocultar senha" : "Mostrar senha");
+    byId("togglePassword").title = shouldShow ? "Ocultar senha" : "Mostrar senha";
+  });
   byId("loginForm").addEventListener("submit", event => { event.preventDefault(); loginAccount(); });
 }
 async function loginAccount() {
   if (busy) return;
+  const email = normalized(byId("authEmail").value);
   setBusy(true);
-  try { await FB.login(byId("authEmail").value, byId("authPassword").value); }
-  catch (error) { notice(friendlyError(error), true); }
+  try {
+    await FB.login(email, byId("authPassword").value);
+    localStorage.removeItem(loginAttemptStoragePrefix + email);
+  }
+  catch (error) {
+    if (["auth/invalid-credential", "auth/wrong-password", "auth/user-not-found"].includes(error?.code)) {
+      const attempts = Number(localStorage.getItem(loginAttemptStoragePrefix + email) || 0) + 1;
+      localStorage.setItem(loginAttemptStoragePrefix + email, String(attempts));
+      byId("resetPasswordLink").hidden = attempts < 3;
+      notice(attempts >= 3 ? "E-mail ou senha incorretos. Você pode recuperar sua senha pelo link abaixo." : friendlyError(error), true);
+    } else notice(friendlyError(error), true);
+  }
   finally { setBusy(false); }
 }
 async function registerAccount() {
@@ -81,25 +129,15 @@ async function registerAccount() {
   } catch (error) { notice(friendlyError(error), true); }
   finally { setBusy(false); }
 }
-async function resetAccountPassword() {
+async function resetAccountPassword(event) {
+  event?.preventDefault();
   const email = byId("authEmail")?.value;
   if (!email) { notice("Digite seu e-mail no campo acima primeiro.", true); return; }
   try { await FB.resetPassword(email); notice("Enviamos um link para redefinir sua senha."); }
   catch (error) { notice(friendlyError(error), true); }
 }
-async function resendVerificationEmail() {
-  const email = byId("authEmail")?.value;
-  const password = byId("authPassword")?.value;
-  if (!email || !password) { notice("Digite seu e-mail e sua senha para reenviar a confirmação.", true); return; }
-  if (busy) return;
-  setBusy(true);
-  try {
-    await FB.resendVerification(email, password);
-    notice("Novo link de confirmação enviado. Confira sua caixa de entrada e o spam.");
-  } catch (error) { notice(friendlyError(error), true); }
-  finally { setBusy(false); }
-}
 async function logoutUser() {
+  stopRepertoirePresence();
   await FB.logout();
   user = null; data = []; activeId = null;
   showLogin("Você saiu da sua conta.");
@@ -114,7 +152,7 @@ function friendlyError(error) {
     "auth/weak-password": "Use uma senha com pelo menos 6 caracteres.",
     "auth/invalid-email": "Confira o formato do e-mail.",
     "auth/unsupported-email-domain": "Use um endereço @gmail.com, @hotmail.com ou @icloud.com.",
-    "auth/email-not-verified": "Confirme seu e-mail pelo link enviado antes de entrar. Se precisar, toque em Reenviar confirmação.",
+    "auth/email-not-verified": "Confirme seu e-mail pelo link de verificação enviado antes de entrar.",
     "auth/email-already-verified": "Este e-mail já está confirmado. Entre na sua conta.",
     "permission-denied": "O Firebase negou esta ação. Confira se você entrou na conta e se as regras do Firestore foram publicadas.",
     "unavailable": "O Firebase está temporariamente indisponível. Tente novamente."
@@ -217,8 +255,9 @@ async function refreshData() {
   catch (error) { notice(friendlyError(error), true); }
 }
 function renderHome() {
+  if (viewingAccessLogs) { renderAccessLogs(accessLogData); return; }
   activeId = null;
-  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
+  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn" onclick="openAccessLogs()">Histórico de acessos</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
   const cards = byId("cards");
   if (!data.length) { cards.innerHTML = '<div class="empty">Você ainda não tem repertórios. Crie o primeiro para começar.</div>'; return; }
   data.forEach(record => {
@@ -237,10 +276,70 @@ function renderHome() {
 function openRep(id) {
   activeId = id;
   if (sharedRouteId && id !== sharedRouteId) return;
+  const record = currentRep();
+  if (record) FB.recordRepertoireAccess(record.id, record.name).catch(error => console.warn("Não foi possível registrar este acesso:", error));
+  startRepertoirePresence(id);
   renderDetail();
+}
+async function openAccessLogs() {
+  if (!isSiteOwner()) return;
+  viewingAccessLogs = true;
+  accessLogData = null;
+  renderAccessLogs(null);
+  try {
+    accessLogData = await FB.listAccessLogs();
+    if (viewingAccessLogs) renderAccessLogs(accessLogData);
+  } catch (error) {
+    accessLogData = { error: friendlyError(error) };
+    if (viewingAccessLogs) renderAccessLogs(accessLogData);
+  }
+}
+function renderAccessLogs(logs) {
+  const rows = Array.isArray(logs) ? logs.map(item => {
+    const date = item.accessedAt?.toDate ? item.accessedAt.toDate().toLocaleString("pt-BR") : "Registrando horário…";
+    return '<article class="access-log-row" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid #edf0eb"><div style="display:grid;gap:3px"><strong style="font-size:12px">' + escapeHtml(item.email || "Conta sem e-mail") + '</strong><span class="muted">' + escapeHtml(item.repertoireName || "Repertório") + '</span></div><time class="muted">' + escapeHtml(date) + '</time></article>';
+  }).join("") : logs?.error ? '<div class="empty">' + escapeHtml(logs.error) + '</div>' : '<div class="loading">Carregando acessos…</div>';
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="closeAccessLogs()">← Repertórios</button></div><div class="heading"><div><div class="eyebrow">SOMENTE ADMINISTRADOR</div><h1>Histórico de acessos</h1><p>Repertório aberto, e-mail da conta e horário. Mostrando os 100 acessos mais recentes.</p></div><button class="btn" onclick="openAccessLogs()">Atualizar</button></div><section class="panel access-log-list">' + (Array.isArray(logs) && logs.length ? rows : Array.isArray(logs) ? '<div class="empty">Nenhum acesso registrado ainda.</div>' : rows) + '</section>';
+}
+function closeAccessLogs() {
+  viewingAccessLogs = false;
+  accessLogData = null;
+  renderHome();
+}
+function startRepertoirePresence(repertoireId) {
+  if (activePresenceId === repertoireId && activePresenceStop) return;
+  stopRepertoirePresence();
+  activePresenceId = repertoireId;
+  activePresenceUsers = [];
+  activePresenceStop = FB.watchRepertoirePresence(repertoireId, (users, error) => {
+    if (error) {
+      console.warn("Não foi possível atualizar quem está acessando o repertório:", error);
+      const container = byId("presenceList");
+      if (container) container.innerHTML = '<span class="muted">Presença ao vivo indisponível. Confira as regras publicadas no Firestore.</span>';
+      return;
+    }
+    activePresenceUsers = users;
+    renderPresence(users);
+  });
+}
+function stopRepertoirePresence() {
+  if (activePresenceStop) activePresenceStop();
+  activePresenceStop = null;
+  activePresenceId = null;
+  activePresenceUsers = [];
+}
+function renderPresence(users) {
+  const container = byId("presenceList");
+  if (!container) return;
+  if (!users.length) {
+    container.innerHTML = '<span class="muted">Só você está acessando agora.</span>';
+    return;
+  }
+  container.innerHTML = users.map(item => '<span class="presence-person"><i></i>' + escapeHtml(item.uid === user?.uid ? "Você" : item.name || "Integrante") + '</span>').join("");
 }
 function goHome() {
   if (sharedRouteId) return;
+  stopRepertoirePresence();
   history.replaceState({}, "", location.pathname);
   renderHome();
 }
@@ -249,7 +348,7 @@ function renderDetail() {
   if (!record) { renderHome(); return; }
   const owner = record.isOwner;
   const detailActions = owner ? '<button class="btn" onclick="openComments()">Comentários (' + record.comments.length + ')</button>' : '<button class="btn" onclick="openCommentForm()">Deixar comentário</button>';
-  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section><section class="panel observations-panel"><h2>Observações para os músicos</h2><p class="muted">Estas observações ficam visíveis para todos neste repertório.</p><textarea id="observationsText" class="observations-input" maxlength="5000" ' + (owner ? '' : 'readonly') + ' placeholder="' + (owner ? 'Escreva avisos para os músicos...' : 'Nenhuma observação cadastrada.') + '">' + escapeHtml(record.observations || '') + '</textarea><div class="observations-footer"><span class="muted">Até 5.000 caracteres</span>' + (owner ? '<button class="btn primary" onclick="saveObservations()">Salvar observações</button>' : '') + '</div></section><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section>';
+  appRoot.innerHTML = '<div class="detailbar"><button class="back" onclick="goHome()">← ' + (sharedRouteId ? 'Acesso compartilhado' : 'Repertórios') + '</button><span class="spacer"></span>' + detailActions + '</div><div class="heading"><div><div class="eyebrow">' + (owner ? 'REPERTÓRIO DA BANDA' : 'REPERTÓRIO COMPARTILHADO') + '</div><h1>' + escapeHtml(record.name) + '</h1><p>' + record.songs.length + ' músicas · ' + (owner ? 'você é o dono' : record.canEdit ? 'você pode editar músicas e cifras' : 'somente leitura e comentários') + '</p></div><div class="heading-actions"><button class="btn primary" onclick="openReader()">▤ Ver em sequência</button></div></div><section class="panel presence-panel"><h2>Acessando agora</h2><div class="presence-list" id="presenceList"><span class="muted">Atualizando presença…</span></div></section><section class="panel"><h2>Músicas neste repertório</h2><p class="muted">Use as setas para definir a ordem em que as músicas aparecerão na folha contínua.</p><div class="songlist" id="songlist"></div></section><section class="panel observations-panel"><h2>Observações para os músicos</h2><p class="muted">Estas observações ficam visíveis para todos neste repertório.</p><textarea id="observationsText" class="observations-input" maxlength="5000" ' + (owner ? '' : 'readonly') + ' placeholder="' + (owner ? 'Escreva avisos para os músicos...' : 'Nenhuma observação cadastrada.') + '">' + escapeHtml(record.observations || '') + '</textarea><div class="observations-footer"><span class="muted">Até 5.000 caracteres</span>' + (owner ? '<button class="btn primary" onclick="saveObservations()">Salvar observações</button>' : '') + '</div></section><section class="panel"><h2>Acesso ao repertório</h2><p class="muted">Contas com e-mail confirmado podem visualizar. O dono libera a edição para e-mails específicos.</p><div class="memberline">' + avatars(record.members) + '<span class="muted">' + (owner ? record.editorEmails.length + ' editor(es)' : 'visualização compartilhada') + '</span>' + (owner ? '<button class="btn" onclick="shareRep()">Designar editor</button>' : '') + '</div></section>';
   const panels = [...appRoot.querySelectorAll(".panel")];
   const observationsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Observações para os músicos"));
   const songsPanel = panels.find(panel => panel.querySelector("h2")?.textContent.includes("Músicas neste repertório"));
@@ -263,6 +362,7 @@ function renderDetail() {
     headingActions.insertBefore(pdfButton, headingActions.firstChild);
   }
   if (observationsPanel && songsPanel) appRoot.insertBefore(observationsPanel, songsPanel);
+  renderPresence(activePresenceUsers);
   const songsHeading = songsPanel?.querySelector("h2");
   if (songsHeading && record.canEdit) {
     const headingRow = document.createElement("div"); headingRow.className = "panel-title-row";
@@ -275,7 +375,7 @@ function renderDetail() {
   if (!record.songs.length) list.innerHTML = '<div class="empty">Este repertório ainda não tem músicas.</div>';
   record.songs.forEach((song, index) => {
     const row = document.createElement("div"); row.className = "songitem";
-    row.innerHTML = '<span class="songnum">' + String(index + 1).padStart(2, "0") + '</span><span class="disc">♫</span><div><strong>' + escapeHtml(song.name) + '</strong><small>Tom: ' + escapeHtml(song.key) + '</small></div><div class="right">' + (owner ? '<button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para cima" title="Mover para cima" ' + (index === 0 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',-1)">↑</button><button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para baixo" title="Mover para baixo" ' + (index === record.songs.length - 1 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',1)">↓</button>' : '') + '<span class="tag">' + escapeHtml(song.key) + '</span>' + (record.canEdit ? '<button class="btn" onclick="editSong(' + index + ')">Editar</button>' : '') + (owner ? '<button class="btn danger" onclick="confirmDeleteSong(' + index + ')">Apagar</button>' : '') + '</div>';
+    row.innerHTML = '<span class="songnum">' + String(index + 1).padStart(2, "0") + '</span><span class="disc">♫</span><div><strong>' + linkifyLeadingUrl(song.name) + '</strong><small>Tom: ' + escapeHtml(song.key) + '</small></div><div class="right">' + (owner ? '<button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para cima" title="Mover para cima" ' + (index === 0 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',-1)">↑</button><button class="btn order-btn" aria-label="Mover ' + escapeHtml(song.name) + ' para baixo" title="Mover para baixo" ' + (index === record.songs.length - 1 ? 'disabled' : '') + ' onclick="moveSong(' + index + ',1)">↓</button>' : '') + '<span class="tag">' + escapeHtml(song.key) + '</span>' + (record.canEdit ? '<button class="btn" onclick="editSong(' + index + ')">Editar</button>' : '') + (owner ? '<button class="btn danger" onclick="confirmDeleteSong(' + index + ')">Apagar</button>' : '') + '</div>';
     list.appendChild(row);
   });
 }
@@ -412,7 +512,7 @@ function downloadRepertoirePdf() {
   }
   printWindow.opener = null;
   const songsHtml = record.songs.map((song, index) =>
-    '<section class="song"><h2>' + (index + 1) + ". " + escapeHtml(song.name) + '</h2><p class="key">Tom: ' + escapeHtml(song.key || "—") + '</p><div class="lyrics">' + FB.sanitizeSongHtml(song.bodyHtml || plainToHtml(song.body)) + "</div></section>"
+    '<section class="song"><h2>' + (index + 1) + ". " + linkifyLeadingUrl(song.name) + '</h2><p class="key">Tom: ' + escapeHtml(song.key || "—") + '</p><div class="lyrics">' + FB.sanitizeSongHtml(song.bodyHtml || plainToHtml(song.body)) + "</div></section>"
   ).join("");
   const observationsHtml = record.observations
     ? '<section class="observations"><h2>Observações para os músicos</h2><p>' + escapeHtml(record.observations) + "</p></section>"
@@ -433,7 +533,7 @@ function openReaderNow() {
   const paper = byId("paper"); paper.innerHTML = "";
   record.songs.forEach((song, index) => {
     const section = document.createElement("section"); section.className = "readsong";
-    const title = document.createElement("h2"); title.textContent = "[ " + song.name + " ]";
+    const title = document.createElement("h2"); title.innerHTML = "[ " + linkifyLeadingUrl(song.name) + " ]";
     const key = document.createElement("span"); key.textContent = "Tom: " + song.key; title.appendChild(key);
     const body = document.createElement("div"); body.className = "readbody"; body.innerHTML = FB.sanitizeSongHtml(song.bodyHtml || plainToHtml(song.body));
     section.append(title, body); paper.appendChild(section);
@@ -631,8 +731,8 @@ Object.assign(window, {
   logoutUser, registerAccount, resetAccountPassword, newRep, createRep, addSong, saveSong,
   editSong, updateSong, confirmDeleteRep, confirmDeleteSong, shareRep, invite,
   removeMemberByEmail, moveSong, copyLink, openCommentForm, submitComment, openComments,
-  resendVerificationEmail,
   markCommentRead, deleteComment, openModal, closeModal, openReader, downloadRepertoirePdf, closeReader,
+  openAccessLogs, closeAccessLogs,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
   changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll, saveObservations
 });
