@@ -21,8 +21,8 @@ import {
   query,
   where,
   orderBy,
-  limit,
   serverTimestamp,
+  runTransaction,
   deleteField,
   writeBatch,
   onSnapshot
@@ -242,19 +242,41 @@ export function watchRepertoirePresence(repertoireId, callback) {
 }
 export async function recordRepertoireAccess(repertoireId, repertoireName) {
   const user = requireSignedIn();
-  return addDoc(collection(db, "accessLogs"), {
-    uid: user.uid,
-    email: normalizeEmail(user.email),
-    repertoireId: String(repertoireId),
-    repertoireName: String(repertoireName || "").slice(0, 120),
-    accessedAt: serverTimestamp()
+  const email = normalizeEmail(user.email);
+  const accessRef = doc(db, "accessLogs", email);
+  return runTransaction(db, async transaction => {
+    const previous = await transaction.get(accessRef);
+    transaction.set(accessRef, {
+      uid: user.uid,
+      email,
+      repertoireId: String(repertoireId),
+      repertoireName: String(repertoireName || "").slice(0, 120),
+      firstAccessAt: previous.exists() ? previous.data().firstAccessAt : serverTimestamp(),
+      accessedAt: serverTimestamp()
+    });
   });
 }
 export async function listAccessLogs() {
   requireSignedIn();
-  const q = query(collection(db, "accessLogs"), orderBy("accessedAt", "desc"), limit(100));
+  const q = query(collection(db, "accessLogs"), orderBy("accessedAt", "desc"));
   const snap = await getDocs(q);
-  return snap.docs.map(item => ({ id: item.id, ...item.data() }));
+  const unique = new Map();
+  snap.docs.forEach(snapshot => {
+    const item = { id: snapshot.id, ...snapshot.data() };
+    const key = normalizeEmail(item.email) || item.uid || item.id;
+    const existing = unique.get(key);
+    const itemFirst = item.firstAccessAt || item.accessedAt;
+    if (!existing) {
+      item.firstAccessAt = itemFirst;
+      unique.set(key, item);
+      return;
+    }
+    const priorFirst = existing.firstAccessAt || existing.accessedAt;
+    if (itemFirst?.toMillis && (!priorFirst?.toMillis || itemFirst.toMillis() < priorFirst.toMillis())) {
+      existing.firstAccessAt = itemFirst;
+    }
+  });
+  return [...unique.values()];
 }
 export async function createRepertoire(name) {
   const user = requireSignedIn();
