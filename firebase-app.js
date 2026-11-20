@@ -533,9 +533,12 @@ function openReaderNow() {
   stopScroll();
   const paper = byId("paper"); paper.innerHTML = "";
   record.songs.forEach((song, index) => {
-    const section = document.createElement("section"); section.className = "readsong";
-    const title = document.createElement("h2"); title.innerHTML = "[ " + linkifyLeadingUrl(song.name) + " ]";
-    const key = document.createElement("span"); key.textContent = "Tom: " + song.key; title.appendChild(key);
+    const section = document.createElement("section"); section.className = "readsong"; section.dataset.songIndex = String(index);
+    const title = document.createElement("h2");
+    const titleValue = document.createElement("span"); titleValue.className = "reader-title"; titleValue.innerHTML = linkifyLeadingUrl(song.name);
+    const keyLabel = document.createElement("span"); keyLabel.className = "reader-key-label"; keyLabel.textContent = "Tom: ";
+    const key = document.createElement("span"); key.className = "reader-key"; key.textContent = song.key;
+    title.append(document.createTextNode("[ "), titleValue, document.createTextNode(" ]"), keyLabel, key);
     const body = document.createElement("div"); body.className = "readbody"; body.innerHTML = FB.sanitizeSongHtml(song.bodyHtml || plainToHtml(song.body));
     section.append(title, body); paper.appendChild(section);
     if (index < record.songs.length - 1) { const gap = document.createElement("div"); gap.className = "readgap"; paper.appendChild(gap); }
@@ -582,7 +585,8 @@ function closeReader() { stopScroll(); byId("full").classList.remove("open"); do
 function toggleEdit() {
   const record = currentRep(); if (!record?.canEdit) return;
   if (editMode) { saveReaderEdits(); return; }
-  editMode = true; stopScroll(); document.querySelectorAll(".readbody").forEach(body => body.contentEditable = "true");
+  editMode = true; stopScroll();
+  document.querySelectorAll(".readbody,.reader-title,.reader-key").forEach(element => element.contentEditable = "true");
   byId("editbar").style.display = "flex"; byId("editToggle").textContent = "✎ Editando";
 }
 async function saveReaderEdits() {
@@ -590,20 +594,91 @@ async function saveReaderEdits() {
   const record = currentRep();
   if (!record?.canEdit) { editMode = false; notice("Você não tem permissão para editar este repertório.", true); return; }
   try {
-    await Promise.all([...document.querySelectorAll(".readbody")].map((body, index) => {
-      const song = record.songs[index]; body.innerHTML = FB.sanitizeSongHtml(body.innerHTML); song.bodyHtml = body.innerHTML; song.body = body.innerText;
+    const sections = [...byId("paper").querySelectorAll(".readsong")];
+    await Promise.all(sections.map((section, index) => {
+      const song = record.songs[index];
+      const title = section.querySelector(".reader-title"), key = section.querySelector(".reader-key"), body = section.querySelector(".readbody");
+      song.name = title?.innerText.trim() || song.name;
+      song.key = key?.innerText.trim() || "—";
+      body.innerHTML = FB.sanitizeSongHtml(body.innerHTML); song.bodyHtml = body.innerHTML; song.body = body.innerText;
       return FB.updateSong(record.id, song.id, { title: song.name, key: song.key, body: song.body, bodyHtml: song.bodyHtml, order: index });
     }));
-    editMode = false; document.querySelectorAll(".readbody").forEach(body => body.contentEditable = "false");
+    editMode = false;
+    sections.forEach((section, index) => {
+      const title = section.querySelector(".reader-title"), key = section.querySelector(".reader-key"), body = section.querySelector(".readbody");
+      title.contentEditable = "false"; title.innerHTML = linkifyLeadingUrl(record.songs[index]?.name || title.innerText);
+      key.contentEditable = "false"; body.contentEditable = "false";
+    });
     byId("editbar").style.display = "none"; byId("editToggle").textContent = "✎ Editar"; selectedRange = null;
     await reloadData(); notice("Letra, cifra e marcações salvas no Firebase.");
   } catch (error) { notice(friendlyError(error), true); }
 }
+const readerPaletteColors = [
+  { name: "Vermelho", hex: "#e53935" }, { name: "Vermelho alaranjado", hex: "#f4511e" },
+  { name: "Laranja", hex: "#fb8c00" }, { name: "Dourado", hex: "#f9a825" },
+  { name: "Amarelo", hex: "#fdd835" }, { name: "Verde limão", hex: "#c0ca33" },
+  { name: "Verde", hex: "#43a047" }, { name: "Verde azulado", hex: "#00897b" },
+  { name: "Ciano", hex: "#00acc1" }, { name: "Azul", hex: "#1e88e5" },
+  { name: "Índigo", hex: "#3949ab" }, { name: "Violeta", hex: "#8e24aa" },
+  { name: "Rosa pastel", hex: "#ef9a9a" }, { name: "Coral pastel", hex: "#ffab91" },
+  { name: "Pêssego pastel", hex: "#ffcc80" }, { name: "Dourado pastel", hex: "#ffe082" },
+  { name: "Amarelo pastel", hex: "#fff59d" }, { name: "Limão pastel", hex: "#e6ee9c" },
+  { name: "Verde pastel", hex: "#a5d6a7" }, { name: "Menta pastel", hex: "#80cbc4" },
+  { name: "Ciano pastel", hex: "#80deea" }, { name: "Azul pastel", hex: "#90caf9" },
+  { name: "Lilás pastel", hex: "#b39ddb" }, { name: "Rosa pastel intenso", hex: "#f48fb1" }
+];
+function buildReaderPalettes() {
+  const menus = [...document.querySelectorAll(".editbar .palette-menu")];
+  if (menus.length < 2) return;
+  const style = document.createElement("style");
+  style.id = "reader-palette-generated-styles";
+  style.textContent = readerPaletteColors.map((color, index) => ".lyric-color-c" + String(index + 1).padStart(2, "0") + "{color:" + color.hex + "}").join("")
+    + ".lyric-color-default{color:#202e26!important}.marker-clear{background-color:#fff!important;box-shadow:0 0 0 2px #fff;border-radius:2px;padding:0 1px}"
+    + ".palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr));gap:6px;min-width:240px;padding:10px}.palette-menu[open]>.palette-options.palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr))}.palette-label{grid-column:1/-1;color:#68766d;font:600 11px/1.3 Inter,system-ui,sans-serif;padding-top:3px}.palette-grid .swatch,.palette-grid .text-color-swatch{width:30px;height:30px;border:1px solid #cbd4cb;border-radius:7px;cursor:pointer}.palette-grid .text-color-swatch{background:#fff;font-weight:700}.palette-grid .clear-color{grid-column:1/-1;border:1px solid #e4e8e1;background:#fff;border-radius:7px;padding:7px;color:#435349;text-align:left;font:11px Inter,system-ui,sans-serif}.reader-title[contenteditable=true],.reader-key[contenteditable=true]{outline:1px dashed #9bb9a3;outline-offset:3px;border-radius:2px;min-width:1em}.reader-title[contenteditable=true]{display:inline-block}";
+  document.head.appendChild(style);
+  const buildGroup = (container, kind, colors, offset, label) => {
+    const heading = document.createElement("span"); heading.className = "palette-label"; heading.textContent = label; container.appendChild(heading);
+    colors.forEach((color, index) => {
+      const number = offset + index + 1, colorClass = "lyric-color-c" + String(number).padStart(2, "0");
+      const button = document.createElement("button"); button.type = "button";
+      button.className = kind === "marker" ? "swatch" : "text-color-swatch";
+      button.title = color.name; button.setAttribute("aria-label", color.name);
+      button.onmousedown = event => event.preventDefault();
+      if (kind === "marker") {
+        button.style.backgroundColor = color.hex;
+        button.onclick = () => applyHighlightColor(color.hex, button);
+      } else {
+        button.textContent = "A"; button.style.color = color.hex;
+        button.onclick = () => applyTextColor(colorClass, button);
+      }
+      container.appendChild(button);
+    });
+  };
+  const markerOptions = menus[0].querySelector(".palette-options");
+  markerOptions.classList.add("palette-grid"); markerOptions.replaceChildren();
+  buildGroup(markerOptions, "marker", readerPaletteColors.slice(0, 12), 0, "Cores intensas");
+  buildGroup(markerOptions, "marker", readerPaletteColors.slice(12), 12, "Tons pastéis");
+  const noMarker = document.createElement("button"); noMarker.type = "button"; noMarker.className = "clear-color"; noMarker.textContent = "Sem marca-texto";
+  noMarker.onmousedown = event => event.preventDefault(); noMarker.onclick = () => clearSelectedColor("marker", noMarker); markerOptions.appendChild(noMarker);
+
+  const textOptions = menus[1].querySelector(".palette-options");
+  textOptions.classList.add("palette-grid"); textOptions.replaceChildren();
+  buildGroup(textOptions, "text", readerPaletteColors.slice(0, 12), 0, "Cores intensas");
+  buildGroup(textOptions, "text", readerPaletteColors.slice(12), 12, "Tons pastéis");
+  const noTextColor = document.createElement("button"); noTextColor.type = "button"; noTextColor.className = "clear-color"; noTextColor.textContent = "Cor padrão";
+  noTextColor.onmousedown = event => event.preventDefault(); noTextColor.onclick = () => clearSelectedColor("text", noTextColor); textOptions.appendChild(noTextColor);
+}
+buildReaderPalettes();
 function chooseColor(color, button) {
   markerColor = color; document.querySelectorAll(".swatch").forEach(item => item.classList.remove("selected"));
   if (button) { button.classList.add("selected"); button.closest("details")?.removeAttribute("open"); }
 }
 function applyHighlightColor(color, button) { chooseColor(color, button); applyHighlight(); }
+function clearSelectedColor(kind, button) {
+  if (!editMode || !selectedRange || selectedRange.collapsed) { notice("Selecione primeiro o trecho que deseja limpar.", true); return; }
+  wrapSelectedText(kind === "marker" ? "marker-clear" : "lyric-color-default");
+  button?.closest("details")?.removeAttribute("open");
+}
 function selectedTextRanges(editor, range) {
   const ranges = [], walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
   let textNode;
@@ -655,7 +730,7 @@ function wrapSelectedText(className, backgroundColor = "") {
     selection.addRange(next); selectedRange = next.cloneRange();
   } catch { notice("Não consegui formatar esse trecho. Selecione-o novamente.", true); }
 }
-const textColorClasses = new Set(["lyric-color-red", "lyric-color-blue", "lyric-color-green", "lyric-color-purple", "lyric-color-orange", "lyric-color-black"]);
+const textColorClasses = new Set(["lyric-color-red", "lyric-color-blue", "lyric-color-green", "lyric-color-purple", "lyric-color-orange", "lyric-color-black", "lyric-color-default", ...readerPaletteColors.map((_, index) => "lyric-color-c" + String(index + 1).padStart(2, "0"))]);
 function applyTextColor(colorClass, button) {
   if (!textColorClasses.has(colorClass)) return;
   document.querySelectorAll(".text-color-swatch").forEach(item => item.classList.remove("selected"));
@@ -674,7 +749,7 @@ function applyHighlight() {
 }
 function clearHighlights() {
   if (!editMode) return;
-  document.querySelectorAll(".readbody .marker").forEach(mark => mark.replaceWith(...mark.childNodes));
+  document.querySelectorAll(".readbody .marker,.readbody .marker-clear").forEach(mark => mark.replaceWith(...mark.childNodes));
   selectedRange = null; window.getSelection()?.removeAllRanges();
   notice("Marcações de cor removidas. Salve para guardar a alteração.");
 }

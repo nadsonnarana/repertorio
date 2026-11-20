@@ -95,7 +95,8 @@ export function sanitizeSongHtml(value) {
       return;
     }
     const isMarker = element.classList.contains("marker");
-    const textColorClass = [...element.classList].find(name => /^lyric-color-(red|blue|green|purple|orange|black)$/.test(name));
+    const isMarkerClear = element.classList.contains("marker-clear");
+    const textColorClass = [...element.classList].find(name => /^lyric-color-(?:red|blue|green|purple|orange|black|default|c(?:0[1-9]|1[0-9]|2[0-4]))$/.test(name));
     const background = element.style.backgroundColor;
     const safeColor = /^(#[\da-f]{3,8}|rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\))$/i.test(background);
     element.removeAttribute("class");
@@ -104,6 +105,7 @@ export function sanitizeSongHtml(value) {
       element.classList.add("marker");
       if (safeColor) element.style.backgroundColor = background;
     }
+    if (isMarkerClear) element.classList.add("marker-clear");
     if (textColorClass) element.classList.add(textColorClass);
   });
   return template.innerHTML;
