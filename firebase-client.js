@@ -169,7 +169,10 @@ export async function listRepertoires() {
     publicDocs = { docs: [] };
   }
   const byId = new Map();
-  [...owned.docs, ...publicDocs.docs].forEach(item => byId.set(item.id, { id: item.id, ...item.data() }));
+  // A repertoire may be present in both query results. Prefer its owner query:
+  // the public query can briefly return a stale copy while visibility changes.
+  publicDocs.docs.forEach(item => byId.set(item.id, { id: item.id, ...item.data() }));
+  owned.docs.forEach(item => byId.set(item.id, { id: item.id, ...item.data() }));
   return [...byId.values()];
 }
 export function watchRepertoireChanges(callback) {
@@ -181,7 +184,8 @@ export function watchRepertoireChanges(callback) {
   const refreshSubscriptions = () => {
     if (stopped) return;
     const parents = new Map();
-    [...ownedDocs, ...publicDocs].forEach(item => parents.set(item.id, { id: item.id, ...item.data() }));
+    publicDocs.forEach(item => parents.set(item.id, { id: item.id, ...item.data() }));
+    ownedDocs.forEach(item => parents.set(item.id, { id: item.id, ...item.data() }));
     const desired = new Set();
     const listen = (key, ref) => {
       desired.add(key);
@@ -296,9 +300,17 @@ export async function secureLegacyRepertoire(repertoireId, previousData) {
   if (previousData.ownerUid !== user.uid && normalizeEmail(user.email) !== siteOwnerEmail) {
     throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
   }
-  return updateDoc(doc(db, "repertoires", repertoireId), {
-    publicRead: previousData.publicRead !== false,
-    ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
+  const ref = doc(db, "repertoires", repertoireId);
+  return runTransaction(db, async transaction => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists()) return;
+    const patch = {
+      ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
+    };
+    // Only initialize visibility for old records that do not have the field.
+    // A concurrent owner toggle must never be overwritten by this migration.
+    if (!Object.prototype.hasOwnProperty.call(snapshot.data(), "publicRead")) patch.publicRead = true;
+    transaction.update(ref, patch);
   });
 }
 export async function setRepertoireVisibility(repertoireId, visible) {
