@@ -13,6 +13,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   addDoc,
   setDoc,
@@ -315,7 +316,14 @@ export async function secureLegacyRepertoire(repertoireId, previousData) {
 }
 export async function setRepertoireVisibility(repertoireId, visible) {
   requireSignedIn();
-  return updateDoc(doc(db, "repertoires", repertoireId), { publicRead: Boolean(visible) });
+  const ref = doc(db, "repertoires", repertoireId);
+  const expectedVisibility = Boolean(visible);
+  await updateDoc(ref, { publicRead: expectedVisibility });
+  const saved = await getDocFromServer(ref);
+  if (!saved.exists() || saved.data().publicRead !== expectedVisibility) {
+    throw new Error("O Firebase não confirmou a alteração de visibilidade. Verifique se as regras atualizadas do Firestore foram publicadas.");
+  }
+  return saved;
 }
 export async function setRepertoireName(repertoireId, name) {
   requireSignedIn();

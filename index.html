@@ -46,7 +46,7 @@ function submitComment(){if(!viewerOnly){toast('Comentários estão disponíveis
 function openComments(){if(viewerOnly)return;const r=rep(activeId);const rows=r.comments.length?r.comments.map((c,i)=>'<div class="commentrow"><strong>'+esc(c.name)+'</strong><time>'+esc(c.created||'')+'</time><p>'+esc(c.text)+'</p><button class="btn" onclick="markCommentRead('+i+')">'+(c.reviewed?'Visto':'Marcar como visto')+'</button> <button class="btn danger" onclick="deleteComment('+i+')">Apagar comentário</button></div>').join(''):'<div class="empty">Ainda não há comentários neste repertório.</div>';openModal('<h2>Comentários · '+esc(r.name)+'</h2><p>Comentários recebidos para este repertório.</p><div>'+rows+'</div><div class="modalfoot"><button class="btn" onclick="closeModal()">Fechar</button></div>')}
 function markCommentRead(i){const r=rep(activeId);if(r.comments[i])r.comments[i].reviewed=true;save();openComments()}
 async function deleteComment(i){if(!await siteConfirm('Apagar este comentário?','Apagar comentário'))return;rep(activeId).comments.splice(i,1);save();openComments()}const query=new URLSearchParams(location.search).get('repertory');if(query){viewerOnly=true;activeId=query}document.getElementById('app').innerHTML='<div class="empty">Conectando ao Firebase…</div>';
-</script><script type="module" src="./firebase-app.js"></script></body></html>
+</script><script type="module" src="./firebase-app.js?v=20261123-3"></script></body></html>
 
 
 

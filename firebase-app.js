@@ -1,9 +1,11 @@
-import * as FB from "./firebase-client.js";
+import * as FB from "./firebase-client.js?v=20261123-3";
 
 let user = null;
 let data = [];
 let activeId = null;
 let repertoireSearchQuery = "";
+let repertoireSearchOpen = false;
+const visibilityUpdates = new Set();
 let busy = false;
 let editMode = false;
 let markerColor = "#fff2a8";
@@ -246,7 +248,7 @@ function startLiveSync() {
 }
 async function flushLiveSync() {
   if (!liveSyncPending || !user) return;
-  if (editMode || byId("full")?.classList.contains("open") || byId("modalback")?.classList.contains("open") || byId("observationsText") === document.activeElement) return;
+  if (editMode || visibilityUpdates.size || byId("full")?.classList.contains("open") || byId("modalback")?.classList.contains("open") || byId("observationsText") === document.activeElement) return;
   liveSyncPending = false;
   try {
     await reloadData();
@@ -260,12 +262,13 @@ async function refreshData() {
 function renderHome() {
   if (viewingAccessLogs) { renderAccessLogs(accessLogData); return; }
   activeId = null;
-  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn" onclick="openAccessLogs()">Histórico de acessos</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><label class="repertoire-search"><span>Buscar repertório</span><input id="repertoireSearch" type="search" placeholder="Digite o nome do repertório" value="' + escapeHtml(repertoireSearchQuery) + '" oninput="updateRepertoireSearch(this.value)" aria-label="Buscar repertórios pelo nome"></label><div class="cards" id="cards"></div><div class="empty" id="noSearchResults" hidden>Nenhum repertório corresponde à busca.</div>';
+  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn" onclick="openAccessLogs()">Histórico de acessos</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="repertoire-search ' + (repertoireSearchOpen ? 'is-open' : '') + '"><button type="button" class="search-toggle" onclick="toggleRepertoireSearch()" aria-label="' + (repertoireSearchOpen ? 'Fechar busca' : 'Buscar repertório') + '" aria-expanded="' + repertoireSearchOpen + '"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 5 5"/></svg></button><input id="repertoireSearch" type="search" placeholder="Digite o nome do repertório" value="' + escapeHtml(repertoireSearchQuery) + '" oninput="updateRepertoireSearch(this.value)" aria-label="Buscar repertórios pelo nome" ' + (repertoireSearchOpen ? '' : 'hidden') + '><button type="button" class="search-close" onclick="closeRepertoireSearch()" aria-label="Fechar busca" ' + (repertoireSearchOpen ? '' : 'hidden') + '>×</button></div><div class="cards" id="cards"></div><div class="empty" id="noSearchResults" hidden>Nenhum repertório corresponde à busca.</div>';
   const cards = byId("cards");
   if (!data.length) { cards.innerHTML = '<div class="empty">Você ainda não tem repertórios. Crie o primeiro para começar.</div>'; return; }
   data.forEach(record => {
     const card = document.createElement("article");
     card.className = "repcard";
+    card.dataset.repertoireId = record.id;
     card.dataset.searchName = normalizeSearchText(record.name);
     card.innerHTML = '<div class="rephead"><div><h2>' + escapeHtml(record.name) + '</h2><p>' + record.songs.length + ' músicas · ' + (record.publicRead ? 'visível para contas confirmadas' : 'oculto para outras contas') + (record.isOwner ? ' · ' + record.editorEmails.length + ' editor(es)' : '') + '</p></div><span class="repicon">▤</span></div><div class="repfoot">' + avatars(record.members) + '<div class="card-actions"></div></div>';
     const actions = card.querySelector(".card-actions");
@@ -294,14 +297,35 @@ function updateRepertoireSearch(value) {
 }
 async function toggleRepertoireVisibility(id) {
   const record = data.find(item => item.id === id);
-  if (!record?.isOwner) return;
+  if (!record?.isOwner || visibilityUpdates.has(id)) return;
   const nextVisibility = !record.publicRead;
+  visibilityUpdates.add(id);
+  const button = [...document.querySelectorAll(".visibility-btn")].find(item => item.closest(".repcard")?.dataset.repertoireId === id);
+  if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
   try {
     await FB.setRepertoireVisibility(id, nextVisibility);
     record.publicRead = nextVisibility;
     renderHome();
     notice(nextVisibility ? "Repertório visível para outras contas." : "Repertório oculto para outras contas.");
-  } catch (error) { notice(friendlyError(error), true); }
+  } catch (error) { console.error("Falha ao salvar a visibilidade do repertório:", error); notice(friendlyError(error), true); }
+  finally {
+    visibilityUpdates.delete(id);
+    if (liveSyncPending) setTimeout(flushLiveSync, 50);
+  }
+}
+function toggleRepertoireSearch() {
+  if (repertoireSearchOpen) { closeRepertoireSearch(); return; }
+  repertoireSearchOpen = true;
+  const container = document.querySelector(".repertoire-search"), input = byId("repertoireSearch"), close = document.querySelector(".search-close"), button = document.querySelector(".search-toggle");
+  container?.classList.add("is-open"); if (input) { input.hidden = false; input.focus(); }
+  if (close) close.hidden = false; if (button) { button.setAttribute("aria-label", "Pesquisar repertórios"); button.setAttribute("aria-expanded", "true"); }
+}
+function closeRepertoireSearch() {
+  repertoireSearchOpen = false; repertoireSearchQuery = "";
+  const container = document.querySelector(".repertoire-search"), input = byId("repertoireSearch"), close = document.querySelector(".search-close"), button = document.querySelector(".search-toggle");
+  container?.classList.remove("is-open"); if (input) { input.value = ""; input.hidden = true; }
+  if (close) close.hidden = true; if (button) { button.setAttribute("aria-label", "Buscar repertório"); button.setAttribute("aria-expanded", "false"); }
+  updateRepertoireSearch("");
 }
 function openRep(id) {
   activeId = id;
@@ -665,6 +689,9 @@ function buildReaderPalettes() {
     + ".lyric-color-default{color:#202e26!important}.marker-clear{background-color:#fff!important;box-shadow:0 0 0 2px #fff;border-radius:2px;padding:0 1px}"
     + ".palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr));gap:6px;min-width:240px;padding:10px}.palette-menu[open]>.palette-options.palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr))}.palette-label{grid-column:1/-1;color:#68766d;font:600 11px/1.3 Inter,system-ui,sans-serif;padding-top:3px}.palette-grid .swatch,.palette-grid .text-color-swatch{width:30px;height:30px;border:1px solid #cbd4cb;border-radius:7px;cursor:pointer}.palette-grid .text-color-swatch{background:#fff;font-weight:700}.palette-grid .clear-color{grid-column:1/-1;border:1px solid #e4e8e1;background:#fff;border-radius:7px;padding:7px;color:#435349;text-align:left;font:11px Inter,system-ui,sans-serif}.readsong h2 .reader-title{font-size:20px;font-weight:750;color:#263b2e;margin-left:0}.readsong h2 .reader-title a{color:inherit}.readsong h2 .reader-key-label,.readsong h2 .reader-key{font-size:13px;font-weight:500;color:#68766d}.readsong h2 .reader-key-label{margin-left:10px}.readgap{height:1px;margin:24px 0;border-top:1px solid #dce3dc}.repertoire-search{display:flex;align-items:center;gap:12px;margin:0 0 16px;padding:12px 15px;background:#fff;border:1px solid #e4e8e1;border-radius:10px;color:#59685e;font-size:12px}.repertoire-search input{flex:1;min-width:0;border:0;outline:0;color:#202e26;font:inherit}.repertoire-search:focus-within{border-color:#79a88b;box-shadow:0 0 0 3px #286c5214}.card-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto}.card-actions .delete-action{margin-left:auto}.visibility-btn{display:inline-flex;align-items:center;gap:5px}.visibility-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.repcard[hidden]{display:none}@media(max-width:600px){.repertoire-search{align-items:flex-start;flex-direction:column;gap:5px}.repertoire-search input{width:100%}.card-actions{flex-wrap:wrap}.card-actions .delete-action{margin-left:0}}.reader-title[contenteditable=true],.reader-key[contenteditable=true]{outline:1px dashed #9bb9a3;outline-offset:3px;border-radius:2px;min-width:1em}.reader-title[contenteditable=true]{display:inline-block}";
   document.head.appendChild(style);
+  const homeStyle = document.createElement("style");
+  homeStyle.textContent = ".repertoire-search{display:inline-flex;flex-direction:row;align-items:center;gap:8px;width:auto;min-height:0;margin:0 0 16px;padding:0;border:0;background:transparent;box-shadow:none}.repertoire-search:focus-within{border:0;box-shadow:none}.search-toggle,.search-close{display:grid;place-items:center;width:42px;height:42px;flex:none;padding:0;border:1px solid #e4e8e1;border-radius:10px;background:#fff;color:#286c52;cursor:pointer}.search-toggle:hover,.search-close:hover{background:#f1f7f1;border-color:#bfd2c3}.search-toggle svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round}.repertoire-search input{width:min(340px,calc(100vw - 130px));min-height:42px;padding:0 12px;border:1px solid #e4e8e1;border-radius:9px;background:#fff;color:#202e26;font:13px Inter,system-ui,sans-serif}.repertoire-search input[hidden],.search-close[hidden]{display:none!important}.repertoire-search.is-open{width:min(440px,100%);padding:0;border:0;background:transparent}.search-close{width:34px;height:34px;font-size:23px;line-height:1}.repertoire-search.is-open .search-toggle{display:none}@media(max-width:600px){.repertoire-search.is-open{width:100%}.repertoire-search input{flex:1;width:0;min-width:0}}";
+  document.head.appendChild(homeStyle);
   const buildGroup = (container, kind, colors, offset, label) => {
     const heading = document.createElement("span"); heading.className = "palette-label"; heading.textContent = label; container.appendChild(heading);
     colors.forEach((color, index) => {
@@ -838,7 +865,7 @@ Object.assign(window, {
   removeMemberByEmail, moveSong, copyLink, openCommentForm, submitComment, openComments,
   markCommentRead, deleteComment, openModal, closeModal, openReader, downloadRepertoirePdf, closeReader,
   openAccessLogs, closeAccessLogs,
-  updateRepertoireSearch, toggleRepertoireVisibility,
+  updateRepertoireSearch, toggleRepertoireVisibility, toggleRepertoireSearch, closeRepertoireSearch,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
   changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll, saveObservations
 });
