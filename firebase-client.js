@@ -297,9 +297,13 @@ export async function secureLegacyRepertoire(repertoireId, previousData) {
     throw new Error("Somente o dono pode limpar os dados antigos de acesso.");
   }
   return updateDoc(doc(db, "repertoires", repertoireId), {
-    publicRead: true,
+    publicRead: previousData.publicRead !== false,
     ownerEmail: deleteField(), memberEmails: deleteField(), editorEmails: deleteField(), editorUids: deleteField()
   });
+}
+export async function setRepertoireVisibility(repertoireId, visible) {
+  requireSignedIn();
+  return updateDoc(doc(db, "repertoires", repertoireId), { publicRead: Boolean(visible) });
 }
 export async function setRepertoireName(repertoireId, name) {
   requireSignedIn();

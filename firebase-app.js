@@ -3,6 +3,7 @@ import * as FB from "./firebase-client.js";
 let user = null;
 let data = [];
 let activeId = null;
+let repertoireSearchQuery = "";
 let busy = false;
 let editMode = false;
 let markerColor = "#fff2a8";
@@ -171,12 +172,12 @@ async function reloadData() {
       || Object.prototype.hasOwnProperty.call(item, "memberEmails")
       || Object.prototype.hasOwnProperty.call(item, "editorEmails")
       || Object.prototype.hasOwnProperty.call(item, "editorUids")
-      || item.publicRead !== true
+      || !Object.prototype.hasOwnProperty.call(item, "publicRead")
     );
     if (needsCleanup) {
       await FB.secureLegacyRepertoire(item.id, item);
       cleanedLegacyEmails = true;
-      return { ...item, publicRead: true };
+      return { ...item, publicRead: item.publicRead !== false };
     }
     return item;
   }));
@@ -192,6 +193,7 @@ async function reloadData() {
       name: item.name || "Repertório sem nome",
       ownerUid: item.ownerUid,
       isOwner,
+      publicRead: item.publicRead !== false,
       canEdit,
       editorEmails,
       members: membersFor({ ...item, isOwner, editorEmails }),
@@ -258,21 +260,48 @@ async function refreshData() {
 function renderHome() {
   if (viewingAccessLogs) { renderAccessLogs(accessLogData); return; }
   activeId = null;
-  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn" onclick="openAccessLogs()">Histórico de acessos</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><div class="cards" id="cards"></div>';
+  appRoot.innerHTML = '<div class="heading"><div><div class="eyebrow">SEUS REPERTÓRIOS</div><h1>Bem-vindo, ' + escapeHtml(user?.displayName || user?.email?.split("@")[0] || "músico") + '</h1><p>Repertórios e cifras sincronizados com sua conta.</p></div><div class="authactions">' + (isSiteOwner() ? '<button class="btn" onclick="openAccessLogs()">Histórico de acessos</button><button class="btn primary" onclick="newRep()">＋ Novo repertório</button>' : '') + '</div></div><label class="repertoire-search"><span>Buscar repertório</span><input id="repertoireSearch" type="search" placeholder="Digite o nome do repertório" value="' + escapeHtml(repertoireSearchQuery) + '" oninput="updateRepertoireSearch(this.value)" aria-label="Buscar repertórios pelo nome"></label><div class="cards" id="cards"></div><div class="empty" id="noSearchResults" hidden>Nenhum repertório corresponde à busca.</div>';
   const cards = byId("cards");
   if (!data.length) { cards.innerHTML = '<div class="empty">Você ainda não tem repertórios. Crie o primeiro para começar.</div>'; return; }
   data.forEach(record => {
     const card = document.createElement("article");
     card.className = "repcard";
-    card.onclick = () => openRep(record.id);
-    card.innerHTML = '<div class="rephead"><div><h2>' + escapeHtml(record.name) + '</h2><p>' + record.songs.length + ' músicas · visualização para contas confirmadas' + (record.isOwner ? ' · ' + record.editorEmails.length + ' editor(es)' : '') + '</p></div><span class="repicon">▤</span></div><div class="repfoot">' + avatars(record.members) + '<span class="statsmall">Abrir repertório →</span></div>';
+    card.dataset.searchName = normalizeSearchText(record.name);
+    card.innerHTML = '<div class="rephead"><div><h2>' + escapeHtml(record.name) + '</h2><p>' + record.songs.length + ' músicas · ' + (record.publicRead ? 'visível para contas confirmadas' : 'oculto para outras contas') + (record.isOwner ? ' · ' + record.editorEmails.length + ' editor(es)' : '') + '</p></div><span class="repicon">▤</span></div><div class="repfoot">' + avatars(record.members) + '<div class="card-actions"></div></div>';
+    const actions = card.querySelector(".card-actions");
+    const open = document.createElement("button"); open.type = "button"; open.className = "btn primary"; open.textContent = "Abrir repertório →";
+    open.onclick = () => openRep(record.id); actions.appendChild(open);
     if (record.isOwner) {
+      const visibility = document.createElement("button"); visibility.type = "button"; visibility.className = "btn visibility-btn";
+      visibility.innerHTML = (record.publicRead ? ' <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg> Visível' : ' <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m3 3 18 18M10.6 5.2A10.7 10.7 0 0 1 12 5c6.4 0 10 7 10 7a15.5 15.5 0 0 1-3 3.8M6.2 6.3C3.5 8.1 2 12 2 12s3.6 7 10 7c1.3 0 2.5-.3 3.5-.7"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg> Oculto');
+      visibility.title = record.publicRead ? "Ocultar para outras contas" : "Tornar visível para outras contas";
+      visibility.setAttribute("aria-label", visibility.title); visibility.onclick = () => toggleRepertoireVisibility(record.id); actions.appendChild(visibility);
       const del = document.createElement("button"); del.className = "delete-action"; del.textContent = "Apagar repertório";
-      del.onclick = event => { event.stopPropagation(); confirmDeleteRep(record.id); };
-      card.appendChild(del);
+      del.type = "button"; del.onclick = () => confirmDeleteRep(record.id); actions.appendChild(del);
     }
     cards.appendChild(card);
   });
+  updateRepertoireSearch(repertoireSearchQuery);
+}
+function normalizeSearchText(value) { return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR").trim(); }
+function updateRepertoireSearch(value) {
+  repertoireSearchQuery = String(value || "");
+  const query = normalizeSearchText(repertoireSearchQuery), cards = byId("cards");
+  if (!cards) return;
+  let visible = 0;
+  cards.querySelectorAll(".repcard").forEach(card => { const matches = card.dataset.searchName.includes(query); card.hidden = !matches; if (matches) visible++; });
+  const noResults = byId("noSearchResults"); if (noResults) noResults.hidden = visible > 0 || !query;
+}
+async function toggleRepertoireVisibility(id) {
+  const record = data.find(item => item.id === id);
+  if (!record?.isOwner) return;
+  const nextVisibility = !record.publicRead;
+  try {
+    await FB.setRepertoireVisibility(id, nextVisibility);
+    record.publicRead = nextVisibility;
+    renderHome();
+    notice(nextVisibility ? "Repertório visível para outras contas." : "Repertório oculto para outras contas.");
+  } catch (error) { notice(friendlyError(error), true); }
 }
 function openRep(id) {
   activeId = id;
@@ -634,7 +663,7 @@ function buildReaderPalettes() {
   style.id = "reader-palette-generated-styles";
   style.textContent = readerPaletteColors.map((color, index) => ".lyric-color-c" + String(index + 1).padStart(2, "0") + "{color:" + color.hex + "}").join("")
     + ".lyric-color-default{color:#202e26!important}.marker-clear{background-color:#fff!important;box-shadow:0 0 0 2px #fff;border-radius:2px;padding:0 1px}"
-    + ".palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr));gap:6px;min-width:240px;padding:10px}.palette-menu[open]>.palette-options.palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr))}.palette-label{grid-column:1/-1;color:#68766d;font:600 11px/1.3 Inter,system-ui,sans-serif;padding-top:3px}.palette-grid .swatch,.palette-grid .text-color-swatch{width:30px;height:30px;border:1px solid #cbd4cb;border-radius:7px;cursor:pointer}.palette-grid .text-color-swatch{background:#fff;font-weight:700}.palette-grid .clear-color{grid-column:1/-1;border:1px solid #e4e8e1;background:#fff;border-radius:7px;padding:7px;color:#435349;text-align:left;font:11px Inter,system-ui,sans-serif}.readsong h2 .reader-title{font-size:20px;font-weight:750;color:#263b2e;margin-left:0}.readsong h2 .reader-title a{color:inherit}.readsong h2 .reader-key-label,.readsong h2 .reader-key{font-size:13px;font-weight:500;color:#68766d}.readsong h2 .reader-key-label{margin-left:10px}.readgap{height:1px;margin:24px 0;border-top:1px solid #dce3dc}.reader-title[contenteditable=true],.reader-key[contenteditable=true]{outline:1px dashed #9bb9a3;outline-offset:3px;border-radius:2px;min-width:1em}.reader-title[contenteditable=true]{display:inline-block}";
+    + ".palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr));gap:6px;min-width:240px;padding:10px}.palette-menu[open]>.palette-options.palette-grid{display:grid;grid-template-columns:repeat(6,minmax(30px,1fr))}.palette-label{grid-column:1/-1;color:#68766d;font:600 11px/1.3 Inter,system-ui,sans-serif;padding-top:3px}.palette-grid .swatch,.palette-grid .text-color-swatch{width:30px;height:30px;border:1px solid #cbd4cb;border-radius:7px;cursor:pointer}.palette-grid .text-color-swatch{background:#fff;font-weight:700}.palette-grid .clear-color{grid-column:1/-1;border:1px solid #e4e8e1;background:#fff;border-radius:7px;padding:7px;color:#435349;text-align:left;font:11px Inter,system-ui,sans-serif}.readsong h2 .reader-title{font-size:20px;font-weight:750;color:#263b2e;margin-left:0}.readsong h2 .reader-title a{color:inherit}.readsong h2 .reader-key-label,.readsong h2 .reader-key{font-size:13px;font-weight:500;color:#68766d}.readsong h2 .reader-key-label{margin-left:10px}.readgap{height:1px;margin:24px 0;border-top:1px solid #dce3dc}.repertoire-search{display:flex;align-items:center;gap:12px;margin:0 0 16px;padding:12px 15px;background:#fff;border:1px solid #e4e8e1;border-radius:10px;color:#59685e;font-size:12px}.repertoire-search input{flex:1;min-width:0;border:0;outline:0;color:#202e26;font:inherit}.repertoire-search:focus-within{border-color:#79a88b;box-shadow:0 0 0 3px #286c5214}.card-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-left:auto}.card-actions .delete-action{margin-left:auto}.visibility-btn{display:inline-flex;align-items:center;gap:5px}.visibility-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.repcard[hidden]{display:none}@media(max-width:600px){.repertoire-search{align-items:flex-start;flex-direction:column;gap:5px}.repertoire-search input{width:100%}.card-actions{flex-wrap:wrap}.card-actions .delete-action{margin-left:0}}.reader-title[contenteditable=true],.reader-key[contenteditable=true]{outline:1px dashed #9bb9a3;outline-offset:3px;border-radius:2px;min-width:1em}.reader-title[contenteditable=true]{display:inline-block}";
   document.head.appendChild(style);
   const buildGroup = (container, kind, colors, offset, label) => {
     const heading = document.createElement("span"); heading.className = "palette-label"; heading.textContent = label; container.appendChild(heading);
@@ -809,6 +838,7 @@ Object.assign(window, {
   removeMemberByEmail, moveSong, copyLink, openCommentForm, submitComment, openComments,
   markCommentRead, deleteComment, openModal, closeModal, openReader, downloadRepertoirePdf, closeReader,
   openAccessLogs, closeAccessLogs,
+  updateRepertoireSearch, toggleRepertoireVisibility,
   toggleEdit, saveReaderEdits, chooseColor, applyHighlight, applyHighlightColor, clearHighlights,
   changeReaderFont, formatSelectedText, applyTextColor, topScroll, toggleScroll, saveObservations
 });
